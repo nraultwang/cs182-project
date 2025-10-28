@@ -5,7 +5,7 @@ method: grid
 name: cifar10-resnet18-mvp
 
 metric:
-  name: val_accuracy
+  name: val/accuracy
   goal: maximize
 
 parameters:
