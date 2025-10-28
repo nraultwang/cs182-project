@@ -1,0 +1,28 @@
+# This is the "brain" of your experiment plan.
+# Run 'wandb sweep sweep.yaml' to initialize it.
+program: train.py
+method: grid
+name: cifar10-resnet18-mvp
+
+metric:
+  name: val_accuracy
+  goal: maximize
+
+parameters:
+  # This is the most important parameter for your project.
+  # wandb will run 3 trials for every experiment.
+  seed:
+    values: [42, 123, 1000]
+
+  optimizer:
+    values: ['adam', 'sgd']
+  
+  lr:
+    values: [0.01, 0.001]
+
+  batch_size:
+    values: [128, 256]
+    
+  # You will replace these with your "polar_steps",
+  # "polar_cushion", "model_width", etc.
+
