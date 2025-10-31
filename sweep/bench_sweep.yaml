@@ -1,0 +1,30 @@
+# This sweep is designed to find the max compute throughput
+# of your A6000s.
+program: benchmark.py
+method: grid
+name: a6000-compute-benchmark
+
+metric:
+  name: perf/steps_per_sec
+  goal: maximize
+
+parameters:
+  seed:
+    values: [42]
+
+  model_name:
+    values: ["gpt2-medium"] # A 355M parameter model
+  
+  batch_size:
+    # A6000 has 48GB VRAM. This batch size with bfloat16
+    # and sequence length 1024 should be a good, heavy load.
+    # You can try tuning this even higher (e.g., 48, 64)
+    # until you get an "Out of Memory" error.
+    values: [32]
+
+  sequence_length:
+    values: [1024] # Standard sequence length
+
+  precision:
+    values: ["bfloat16", "float32"] # Test both
+
