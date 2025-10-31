@@ -1,9 +1,18 @@
+import os
+import random
+import torch.distributed as dist
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from transformers import GPT2Config, GPT2LMHeadModel
 import wandb
 import time
+
+if not (dist.is_available() and dist.is_initialized()):
+    base_port = 29500
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", str(base_port + random.randint(0, 1000)))  # randomize port
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=1, rank=0)
 
 # --- NEW IMPORT ---
 # You must install this package: pip install muon-optimizer
@@ -13,6 +22,7 @@ except ImportError:
     print("Error: muon-optimizer package not found.")
     print("Please run: pip install muon-optimizer")
     exit(1)
+
 
 
 def main():
@@ -34,6 +44,10 @@ def main():
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     torch.manual_seed(config.seed)
+
+    # Initialize a distributed process group to make the Muon library happy
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    torch.cuda.set_device(rank % torch.cuda.device_count())
     
     # --- Enable TF32 for better performance on A6000 ---
     if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
@@ -60,10 +74,6 @@ def main():
     # --- 3. Load Model ---
     model_config = GPT2Config.from_pretrained(config.model_name)
     model = GPT2LMHeadModel(model_config).to(device)
-    
-    print("Compiling model (this may take a minute)...")
-    model = torch.compile(model)
-    print("Model compiled.")
     
     # --- UPDATED OPTIMIZER LOGIC (THE FIX) ---
     print(f"Using optimizer: {config.optimizer}")
@@ -100,11 +110,10 @@ def main():
         # and 'adamw' for our 1D params, with its own LR.
         print(f"Using MuonWithAuxAdam. Muon LR: {lr}, Adam LR: {adam_lr}")
         param_groups = [
-                {'params': muon_params, 'lr': lr, 'use_muon': True}, # Muon group (use_muon=True is default)
-                # --- FIX ---
-                # The Muon library expects 'use_muon': False to identify the auxiliary group
-                {'params': adam_params, 'use_muon': False, 'lr': adam_lr} # AdamW group
-            ]
+            {'params': muon_params, 'lr': lr, 'use_muon': True}, # Muon group (use_muon=True is default)
+            # The Muon library expects 'use_muon': False to identify the auxiliary group
+            {'params': adam_params, 'use_muon': False, 'lr': adam_lr} # AdamW group
+        ]
         optimizer = MuonWithAuxAdam(param_groups)
             # --- FOR YOUR REAL PROJECT (POLAR EXPRESS) ---
             # You will import your PolarExpress function and pass it here.
@@ -114,6 +123,15 @@ def main():
             # msign_fn=polar_express_msign 
     else:
         raise ValueError(f"Unknown optimizer: {config.optimizer}")
+
+    # compile the model
+    print("Compiling model (this may take a minute)...")
+    model = torch.compile(model)
+    model = model.to(device)
+    print("Model compiled.")
+    
+
+
     
     # --- 4. The "Benchmark" Loop ---
     n_steps = 150
@@ -146,6 +164,7 @@ def main():
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
+    
 
         # --- 4c. Performance Logging ---
         if step > warmup_steps:
@@ -169,6 +188,7 @@ def main():
 
     print("Benchmark finished.")
     wandb.finish()
+    dist.destroy_process_group()
 
 if __name__ == '__main__':
     main()
