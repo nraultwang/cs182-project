@@ -2,7 +2,7 @@
 # of your A6000s.
 program: benchmark.py
 method: grid
-name: a6000-compute-benchmark
+name: a6000-compute-benchmark-v4-muon
 
 metric:
   name: perf/steps_per_sec
@@ -13,18 +13,17 @@ parameters:
     values: [42]
 
   model_name:
-    values: ["gpt2-medium"] # A 355M parameter model
+    values: ["gpt2-medium"]
   
-  batch_size:
-    # A6000 has 48GB VRAM. This batch size with bfloat16
-    # and sequence length 1024 should be a good, heavy load.
-    # You can try tuning this even higher (e.g., 48, 64)
-    # until you get an "Out of Memory" error.
-    values: [32]
-
   sequence_length:
-    values: [1024] # Standard sequence length
+    values: [1024]
 
-  precision:
-    values: ["bfloat16", "float32"] # Test both
+  run_profile:
+    values: ["bf16_native", "fp32_accumulated"]
+
+  # --- NEW PARAMETER ---
+  # We will test both AdamW (baseline) and Muon
+  optimizer:
+    values: ["adamw", "muon"]
+
 
