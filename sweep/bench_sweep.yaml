@@ -9,15 +9,15 @@ metric:
 
 parameters:
   seed:
-    values: [42]
+    values: [40, 41, 42, 43, 44, 45]
 
   model_name:
-    values: ["gpt2-large"]
+    values: ["gpt2"]
   
   sequence_length:
     values: [1024]
   batch_size:
-    values: [8, 10, 12, 14]
+    values: [16, 24, 32, 48, 56, 64]
 
   run_profile:
     values: ["bf16_native"]
@@ -25,11 +25,6 @@ parameters:
   lr:
     values: [0.1]
 
-  # --- NEW PARAMETER ---
   # We will test both AdamW (baseline) and Muon
   optimizer:
     values: ["muon"]
-
-  # We will test both AdamW (baseline) and Muon
-  optimizer:
-    values: ["muon", "adamw"]

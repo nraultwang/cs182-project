@@ -132,16 +132,13 @@ def main():
     print("Model compiled.")
     
 
-
-    
     # --- 4. The "Benchmark" Loop ---
     start_event = torch.cuda.Event(enable_timing=True)
     end_event = torch.cuda.Event(enable_timing=True)
-    n_steps = 150
+    n_steps = 100
     warmup_steps = 1
     
     model.train()
-    start_time = time.time()
     
     optimizer.zero_grad(set_to_none=True)
     
@@ -225,3 +222,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
