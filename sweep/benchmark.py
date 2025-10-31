@@ -65,17 +65,53 @@ def main():
     model = torch.compile(model)
     print("Model compiled.")
     
-    # --- NEW OPTIMIZER LOGIC ---
+    # --- UPDATED OPTIMIZER LOGIC (THE FIX) ---
     print(f"Using optimizer: {config.optimizer}")
+    
+    # Use .get() to provide a default value if not in the sweep config
+    lr = config.get('lr', 1e-4)
+    adam_lr = config.get('adam_lr', lr) # Default Adam LR to the main LR
+
     if config.optimizer == 'adamw':
-        optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+        print(f"Using AdamW with lr: {lr}")
+        optimizer = optim.AdamW(model.parameters(), lr=lr)
+    
     elif config.optimizer == 'muon':
-        # MuonWithAuxAdam handles the hybrid logic automatically
-        # It applies Muon to 2D+ params and AdamW to 1D params
-        optimizer = MuonWithAuxAdam(model.parameters(), lr=1e-4)
-        # For your REAL project, you will pass your PolarExpress
-        # function here, e.g.:
-        # optimizer = MuonWithAuxAdam(model.parameters(), lr=1e-4, msign_fn=my_polar_express_fn)
+        print("--- Applying Muon Hybrid Optimizer Strategy ---")
+        # BEST PRACTICE: Split parameters for Muon.
+        # Muon should only be applied to 2D+ matrices (weights).
+        # AdamW should be applied to 1D vectors (biases, layernorm, embeddings).
+        muon_params = []
+        adam_params = []
+        
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            
+            if p.ndim >= 2:
+                muon_params.append(p)
+                print(f"  [Muon Param]: {name} (shape: {p.shape})")
+            else:
+                adam_params.append(p)
+                print(f"  [Adam Param]: {name} (shape: {p.shape})")
+
+        # MuonWithAuxAdam takes a list of parameter groups.
+        # We tell it to use 'muon' (the default) for our 2D+ params
+        # and 'adamw' for our 1D params, with its own LR.
+        print(f"Using MuonWithAuxAdam. Muon LR: {lr}, Adam LR: {adam_lr}")
+        param_groups = [
+                {'params': muon_params, 'lr': lr, 'use_muon': True}, # Muon group (use_muon=True is default)
+                # --- FIX ---
+                # The Muon library expects 'use_muon': False to identify the auxiliary group
+                {'params': adam_params, 'use_muon': False, 'lr': adam_lr} # AdamW group
+            ]
+        optimizer = MuonWithAuxAdam(param_groups)
+            # --- FOR YOUR REAL PROJECT (POLAR EXPRESS) ---
+            # You will import your PolarExpress function and pass it here.
+            # The default (if-left-blank) is the standard Newton-Schulz.
+            #
+            # from my_project_code import polar_express_msign
+            # msign_fn=polar_express_msign 
     else:
         raise ValueError(f"Unknown optimizer: {config.optimizer}")
     
@@ -136,5 +172,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
