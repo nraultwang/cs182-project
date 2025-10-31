@@ -33,7 +33,7 @@ def main():
     # --- Logic block to set parameters ---
     if config.run_profile == "bf16_native":
         precision = "bfloat16"
-        batch_size = 16
+        batch_size = config.batch_size
         accumulation_steps = 1
     elif config.run_profile == "fp32_accumulated":
         precision = "float32"
@@ -79,6 +79,7 @@ def main():
     print(f"Using optimizer: {config.optimizer}")
     
     # Use .get() to provide a default value if not in the sweep config
+    sequence_length = config.get("sequence_length", 1024)
     lr = config.get('lr', 1e-4)
     adam_lr = config.get('adam_lr', lr) # Default Adam LR to the main LR
 
@@ -134,21 +135,34 @@ def main():
 
     
     # --- 4. The "Benchmark" Loop ---
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
     n_steps = 150
-    warmup_steps = 20
+    warmup_steps = 1
     
     model.train()
     start_time = time.time()
     
     optimizer.zero_grad(set_to_none=True)
     
+    # --- OPTIMIZATION 3 (FIX): Use CUDA Events for accurate, non-blocking timing ---
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    
+    print(f"--- Starting {n_steps} benchmark steps ({warmup_steps} warmup) ---")
+    
     for step in range(n_steps):
-        # --- 4a. Synthetic Data Generation ---
+        # Start timer after warmup
+        if step == warmup_steps:
+            print(f"--- Warm-up complete. Starting timer. ---")
+            start_event.record() # <--- START timer
+            
+        # --- OPTIMIZATION 4 (FIX): Generate data directly on GPU ---
         inputs = torch.randint(
             0, 
             model_config.vocab_size, 
-            (batch_size, config.sequence_length),
-            device=device
+            (batch_size, sequence_length),
+            device=device  # <--- This avoids the CPU->GPU copy bottleneck
         )
         labels = inputs.clone()
         
@@ -165,28 +179,47 @@ def main():
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
     
+        if step % 10 == 0:
+             print(f"Step {step}/{n_steps} | Loss: {loss.item() * accumulation_steps:.4f}")
 
-        # --- 4c. Performance Logging ---
-        if step > warmup_steps:
-            torch.cuda.synchronize()
-            
-            elapsed_time = time.time() - start_time
-            optimizer_steps_so_far = (step - warmup_steps) // accumulation_steps
-            
-            if optimizer_steps_so_far > 0:
-                steps_per_sec = optimizer_steps_so_far / elapsed_time
+    #print("Benchmark finished.")
+    # --- 5. Final Timing and Logging ---
+    
+    # Record the end event
+    end_event.record()
+    
+    # --- OPTIMIZATION 5 (FIX): Synchronize ONCE, after the loop ---
+    # This waits for all submitted GPU work to finish
+    torch.cuda.synchronize()
+    
+    print("--- Benchmark complete. ---")
 
-                print(f"Micro-Step {step}/{n_steps} | Loss: {loss.item() * accumulation_steps:.4f} | Opt-Steps/sec: {steps_per_sec:.2f}")
-                wandb.log({
-                    "train/loss": loss.item() * accumulation_steps,
-                    "perf/steps_per_sec": steps_per_sec
-                })
-        
-        elif step == warmup_steps:
-            print(f"--- Warm-up complete (ignored {warmup_steps} micro-steps). Starting timer. ---")
-            start_time = time.time()
+    # Calculate final performance metrics
+    elapsed_time_ms = start_event.elapsed_time(end_event)
+    elapsed_time_sec = elapsed_time_ms / 1000.0
+    
+    timed_steps = n_steps - warmup_steps
+    timed_optimizer_steps = timed_steps // accumulation_steps
+    
+    steps_per_sec = timed_optimizer_steps / elapsed_time_sec
+    
+    total_tokens_processed = timed_steps * batch_size * sequence_length
+    tokens_per_sec = total_tokens_processed / elapsed_time_sec
 
-    print("Benchmark finished.")
+    print(f"\n--- Results (Batch Size: {batch_size}) ---")
+    print(f"Total time for {timed_steps} steps: {elapsed_time_sec:.2f} seconds")
+    print(f"Optimizer Steps/sec: {steps_per_sec:.2f}")
+    print(f"Throughput (Tokens/sec): {tokens_per_sec:.2f}")
+
+    # Log the FINAL, accurate metrics to W&B
+    wandb.log({
+        "final_loss": loss.item() * accumulation_steps,
+        "perf/opt_steps_per_sec": steps_per_sec,
+        "perf/tokens_per_sec": tokens_per_sec,
+        "perf/total_time_sec": elapsed_time_sec,
+        "config/batch_size": batch_size # Log batch size for easy grouping
+    })
+
     wandb.finish()
     dist.destroy_process_group()
 

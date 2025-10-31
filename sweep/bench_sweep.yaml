@@ -1,7 +1,7 @@
 # test max compute throughput of A6000s.
 program: benchmark.py
 method: grid
-name: a6000-compute-benchmark-v5-muon
+name: a6000-compute-benchmark-v6-muon
 
 metric:
   name: perf/steps_per_sec
@@ -9,19 +9,26 @@ metric:
 
 parameters:
   seed:
-    values: [41, 42, 43]
+    values: [42]
 
   model_name:
-    values: ["gpt2"]
+    values: ["gpt2-large"]
   
   sequence_length:
     values: [1024]
+  batch_size:
+    values: [8, 10, 12, 14]
 
   run_profile:
     values: ["bf16_native"]
 
   lr:
-    values: [0.01, 0.001, 0.0001, 0.00001, 0.000001]
+    values: [0.1]
+
+  # --- NEW PARAMETER ---
+  # We will test both AdamW (baseline) and Muon
+  optimizer:
+    values: ["muon"]
 
   # We will test both AdamW (baseline) and Muon
   optimizer:
