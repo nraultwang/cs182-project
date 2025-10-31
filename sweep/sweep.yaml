@@ -12,17 +12,16 @@ parameters:
   # This is the most important parameter for your project.
   # wandb will run 3 trials for every experiment.
   seed:
-    values: [42, 123, 1000]
+    values: [42, 43, 44]
 
   optimizer:
-    values: ['adam', 'sgd']
+    values: ['adamw']
   
   lr:
     values: [0.01, 0.001]
 
   batch_size:
-    values: [128, 256]
+    values: [1024]
     
   # You will replace these with your "polar_steps",
   # "polar_cushion", "model_width", etc.
-
