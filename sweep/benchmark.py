@@ -34,7 +34,7 @@ def main():
     if config.run_profile == "bf16_native":
         precision = "bfloat16"
         batch_size = 16
-        accumulation_steps = 2
+        accumulation_steps = 1
     elif config.run_profile == "fp32_accumulated":
         precision = "float32"
         batch_size = 8
@@ -135,7 +135,7 @@ def main():
     
     # --- 4. The "Benchmark" Loop ---
     n_steps = 150
-    warmup_steps = 50
+    warmup_steps = 20
     
     model.train()
     start_time = time.time()

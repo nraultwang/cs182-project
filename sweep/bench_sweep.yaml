@@ -1,8 +1,7 @@
-# This sweep is designed to find the max compute throughput
-# of your A6000s.
+# test max compute throughput of A6000s.
 program: benchmark.py
 method: grid
-name: a6000-compute-benchmark-v4-muon
+name: a6000-compute-benchmark-v5-muon
 
 metric:
   name: perf/steps_per_sec
@@ -10,20 +9,20 @@ metric:
 
 parameters:
   seed:
-    values: [42]
+    values: [41, 42, 43]
 
   model_name:
-    values: ["gpt2-medium"]
+    values: ["gpt2"]
   
   sequence_length:
     values: [1024]
 
   run_profile:
-    values: ["bf16_native", "fp32_accumulated"]
+    values: ["bf16_native"]
 
-  # --- NEW PARAMETER ---
+  lr:
+    values: [0.01, 0.001, 0.0001, 0.00001, 0.000001]
+
   # We will test both AdamW (baseline) and Muon
   optimizer:
-    values: ["adamw", "muon"]
-
-
+    values: ["muon", "adamw"]
