@@ -1,0 +1,30 @@
+# test max compute throughput of A6000s.
+program: benchmark.py
+method: grid
+name: geforce-compute-benchmark
+
+metric:
+  name: perf/tokens_per_sec
+  goal: maximize
+
+parameters:
+  seed:
+    values: [40, 41, 42, 43, 44, 45, 46, 47, 48]
+
+  model_name:
+    values: ["gpt2"]
+  
+  sequence_length:
+    values: [1024]
+  batch_size:
+    values: [12]
+
+  run_profile:
+    values: ["bf16_native"]
+
+  lr:
+    values: [0.1]
+
+  # We will test both AdamW (baseline) and Muon
+  optimizer:
+    values: ["muon"]

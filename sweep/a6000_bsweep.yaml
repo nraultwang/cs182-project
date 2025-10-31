@@ -1,7 +1,7 @@
 # test max compute throughput of A6000s.
 program: benchmark.py
 method: grid
-name: a6000-compute-benchmark-v6-muon
+name: a6000-compute-benchmark
 
 metric:
   name: perf/steps_per_sec
