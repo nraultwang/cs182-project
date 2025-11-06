@@ -1,0 +1,25 @@
+defaults:
+  - gpt_model: gpt-small
+  - hydra: default
+  - _self_
+
+optimizer_params:
+  name: adamw
+  args:
+    lr: 0.001
+    weight_decay: 0.1
+
+lr_schedule:
+  name: constant-linear
+  warm_up_fraction: 0.4
+
+logging_params:
+  val_tokens_processed: 16384  # 2^14
+  log_step: 50
+  val_step: 50
+  save_ckpt_step: 500
+  load_ckpt_step: 0
+  keep_last: 2
+  save_checkpoint: false
+  # wandb:
+  #   project: "polar-express"
