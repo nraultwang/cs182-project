@@ -1,10 +1,32 @@
+"""
+Polar-Express-style polynomial coefficient generation.
+
+Supports degrees 3, 5, and 7 with configurable:
+- l0: initial lower spectral bound
+- num_iters: number of composition iterations
+- cushion: cushioning factor
+- safety: safety factor (>= 1.0, where 1.0 means no safety)
+"""
+
+from math import inf, sqrt
 import numpy as np
 
-def optimal_cubic(l, u, tol=1e-15):
-    """Optimal degree-3 odd polynomial (closed form)"""
-    if 1 - 5e-6 <= l / u:
+
+# =========================
+#  Degree-3 (cubic)
+# =========================
+
+def optimal_cubic(l, u):
+    """
+    Optimal degree-3 odd polynomial: p(t) = a*t + b*t³
+    """
+    assert 0 <= l <= u, f"Invalid bounds: l={l}, u={u}"
+    
+    # Limiting form
+    if u > 0 and (1 - 5e-6) <= (l / u):
         return (3/2)/u, (-1/2)/(u**3)
     
+    # Closed-form solution
     alpha = np.sqrt(3 / (u**2 + l*u + l**2))
     beta = 4 / (2 + l*u*(l + u)*alpha**3)
     
@@ -14,16 +36,25 @@ def optimal_cubic(l, u, tol=1e-15):
     return float(a), float(b)
 
 
-def optimal_quintic(l, u, max_iters=100, tol=1e-15):
-    """Optimal degree-5 odd polynomial (Algorithm 3)"""
-    if 1 - 5e-6 <= l / u:
+# =========================
+#  Degree-5 (quintic)
+# =========================
+
+def optimal_quintic(l, u):
+    """
+    Optimal degree-5 odd polynomial: p(t) = a*t + b*t³ + c*t⁵
+    """
+    assert 0 <= l <= u, f"Invalid bounds: l={l}, u={u}"
+    
+    if u > 0 and (1 - 5e-6) <= (l / u):
         return (15/8)/u, (-10/8)/(u**3), (3/8)/(u**5)
     
+    # Remez-style iteration
     q = (3*l + u) / 4
     r = (l + 3*u) / 4
-    E, old_E = np.inf, None
+    E, old_E = inf, None
     
-    for _ in range(max_iters):
+    while not old_E or abs(old_E - E) > 1e-15:
         old_E = E
         LHS = np.array([
             [l, l**3, l**5, 1],
@@ -33,33 +64,37 @@ def optimal_quintic(l, u, max_iters=100, tol=1e-15):
         ])
         a, b, c, E = np.linalg.solve(LHS, np.ones(4))
         
-        roots = np.roots([5*c, 0, 3*b, 0, a])
-        real_roots = roots[np.abs(np.imag(roots)) < 1e-10].real
-        interior = np.sort(real_roots[(real_roots > l) & (real_roots < u)])
-        
-        if len(interior) >= 2:
-            q, r = interior[:2]
-        
-        if abs(old_E - E) < tol:
+        # Find new equioscillation points
+        discriminant = 9*b**2 - 20*a*c
+        if discriminant < 0:
             break
+        q, r = np.sqrt((-3*b + np.array([-1, 1]) * sqrt(discriminant)) / (10*c))
     
     return float(a), float(b), float(c)
 
 
-def optimal_septic(l, u, max_iters=100, tol=1e-15):
-    """Optimal degree-7 odd polynomial (numerical)"""
-    # Expand the threshold for using limiting form
-    if l / u >= 0.99:  # Changed from 1 - 5e-6
-        return (35/8)/u, (-35/8)/(u**3), (21/8)/(u**5), (-5/8)/(u**7)
+# =========================
+#  Degree-7 (septic)
+# =========================
+
+def optimal_septic(l, u):
+    """
+    Optimal degree-7 odd polynomial: p(t) = a*t + b*t³ + c*t⁵ + d*t⁷
+    """
+    assert 0 <= l <= u, f"Invalid bounds: l={l}, u={u}"
     
-    # Better initialization
+    # Limiting form
+    if u > 0 and (l / u >= 0.99):
+        return (35/16)/u, (-35/16)/(u**3), (21/16)/(u**5), (-5/16)/(u**7)
+    
+    # Remez-style iteration with 3 interior points
     q1 = l + 0.2*(u - l)
     q2 = l + 0.5*(u - l)
     q3 = l + 0.8*(u - l)
     
-    E, old_E = np.inf, None
+    E, old_E = inf, None
     
-    for iteration in range(max_iters):
+    for iteration in range(100):
         old_E = E
         
         LHS = np.array([
@@ -73,14 +108,13 @@ def optimal_septic(l, u, max_iters=100, tol=1e-15):
         try:
             a, b, c, d, E = np.linalg.solve(LHS, np.ones(5))
         except np.linalg.LinAlgError:
-            print(f"  Singular matrix at iteration {iteration}, using limiting form")
-            return (35/8)/u, (-35/8)/(u**3), (21/8)/(u**5), (-5/8)/(u**7)
+            return (35/16)/u, (-35/16)/(u**3), (21/16)/(u**5), (-5/16)/(u**7)
         
-        # Check for numerical issues
-        if not (np.isfinite(a) and np.isfinite(b) and np.isfinite(c) and np.isfinite(d)):
-            print(f"  Non-finite values at iteration {iteration}, using limiting form")
-            return (35/8)/u, (-35/8)/(u**3), (21/8)/(u**5), (-5/8)/(u**7)
+        if not (np.isfinite(a) and np.isfinite(b) and 
+                np.isfinite(c) and np.isfinite(d)):
+            return (35/16)/u, (-35/16)/(u**3), (21/16)/(u**5), (-5/16)/(u**7)
         
+        # Find roots of derivative
         derivative_coeffs = [7*d, 0, 5*c, 0, 3*b, 0, a]
         roots = np.roots(derivative_coeffs)
         
@@ -90,189 +124,227 @@ def optimal_septic(l, u, max_iters=100, tol=1e-15):
         
         if len(interior_roots) >= 3:
             q1_new, q2_new, q3_new = interior_roots[:3]
-            
-            # Safeguard: only update if reasonable
             if l < q1_new < q2_new < q3_new < u:
                 q1, q2, q3 = q1_new, q2_new, q3_new
         
-        if old_E is not None and abs(old_E - E) < tol:
+        if old_E is not None and abs(old_E - E) < 1e-15:
             break
     
     return float(a), float(b), float(c), float(d)
 
 
-def generate_coefficient_sequence(degree, l_init=1e-3, u=1.0, 
-                                   cushion=0.02407327424182761, 
-                                   num_iters=10):
-    """Generate sequence of coefficients as in paper's Algorithm 1"""
+# =========================
+#  Main composition builder
+# =========================
+
+def optimal_composition(l0, num_iters, cushion=0.02407327424182761, 
+                       safety=1.0, degree=5):
+    """
+    Build coefficient list for Polar-Express-style composition.
     
-    if degree == 3:
-        optimal_fn = optimal_cubic
-    elif degree == 5:
-        optimal_fn = optimal_quintic
-    elif degree == 7:
-        optimal_fn = optimal_septic
-    else:
-        raise ValueError("degree must be 3, 5, or 7")
+    Args:
+        l0: Initial lower spectral bound (in range (0, 1])
+        num_iters: Number of composition iterations
+        cushion: Cushioning factor (default from paper: 0.024...)
+        safety: Safety factor (default 1.0 = no safety, paper uses 1.01)
+        degree: Polynomial degree (3, 5, or 7)
     
-    l = l_init
+    Returns:
+        List of coefficient tuples:
+            degree=3: [(a, b), ...]
+            degree=5: [(a, b, c), ...]
+            degree=7: [(a, b, c, d), ...]
+    
+    Example:
+        # Paper's default config for degree 5
+        coeffs = optimal_composition(1e-3, 10, cushion=0.024, safety=1.01, degree=5)
+        
+        # Degree 3 without safety
+        coeffs_3 = optimal_composition(1e-3, 8, safety=1.0, degree=3)
+        
+        # Degree 7 with safety
+        coeffs_7 = optimal_composition(1e-3, 8, safety=1.01, degree=7)
+    """
+    assert 0 < l0 <= 1, "l0 must be in (0, 1]"
+    assert num_iters >= 1, "num_iters must be >= 1"
+    assert degree in (3, 5, 7), "degree must be 3, 5, or 7"
+    assert 0 <= cushion <= 1, "cushion must be in [0, 1]"
+    assert safety >= 1.0, "safety must be >= 1.0"
+    
+    l = l0
     u = 1.0
-    coeffs_list = []
+    coefficients = []
     
     for i in range(num_iters):
-        # Check for convergence
-        if l / u >= 0.9999:
-            print(f"  Converged at iteration {i+1}, using limiting form for remaining")
+        # Check if converged (l and u very close)
+        if l >= u * 0.9999:
             # Use limiting form for remaining iterations
             if degree == 3:
-                limiting_coeffs = ((3/2)/u, (-1/2)/(u**3))
+                lim_coeffs = ((3/2)/u, (-1/2)/(u**3))
             elif degree == 5:
-                limiting_coeffs = ((15/8)/u, (-10/8)/(u**3), (3/8)/(u**5))
-            elif degree == 7:
-                limiting_coeffs = ((35/8)/u, (-35/8)/(u**3), (21/8)/(u**5), (-5/8)/(u**7))
+                lim_coeffs = ((15/8)/u, (-10/8)/(u**3), (3/8)/(u**5))
+            else:  # degree == 7
+                lim_coeffs = ((35/16)/u, (-35/16)/(u**3), (21/16)/(u**5), (-5/16)/(u**7))
             
-            # Fill remaining with limiting form
+            # Fill remaining iterations with limiting form
             for _ in range(num_iters - i):
-                coeffs_list.append(limiting_coeffs)
+                coefficients.append(lim_coeffs)
             break
         
         # Apply cushioning
         l_effective = max(l, cushion * u)
         
-        # Get optimal polynomial
-        coeffs = optimal_fn(l_effective, u)
-        
-        # Recenter (as paper does)
+        # Get optimal polynomial on [l_effective, u]
         if degree == 3:
-            a, b = coeffs
-            pl = a*l_init + b*l_init**3
-            pu = a*u + b*u**3
+            a, b = optimal_cubic(l_effective, u)
+            
+            # Recenter around 1 with respect to [l0, u]
+            pl = a * l0 + b * l0**3
+            pu = a * u + b * u**3
             rescalar = 2 / (pl + pu)
+            a *= rescalar
+            b *= rescalar
             
-            a_final = a * rescalar
-            b_final = b * rescalar
+            # Apply safety factor
+            if safety != 1.0:
+                a /= safety
+                b /= safety**3
             
-            coeffs_list.append((a_final, b_final))
+            coefficients.append((float(a), float(b)))
             
-            # Update bounds
-            l_new = a*l + b*l**3
+            # Update bounds for next iteration
+            l_new = a * l + b * l**3
+            u_new = 2 - l_new
             
-        elif degree == 5:
-            a, b, c = coeffs
-            pl = a*l_init + b*l_init**3 + c*l_init**5
-            pu = a*u + b*u**3 + c*u**5
-            rescalar = 2 / (pl + pu)
-            
-            a_final = a * rescalar
-            b_final = b * rescalar
-            c_final = c * rescalar
-            
-            coeffs_list.append((a_final, b_final, c_final))
-            
-            # Update bounds
-            l_new = a*l + b*l**3 + c*l**5
-            
-        elif degree == 7:
-            a, b, c, d = coeffs
-            pl = a*l_init + b*l_init**3 + c*l_init**5 + d*l_init**7
-            pu = a*u + b*u**3 + c*u**5 + d*u**7
-            
-            # Check for numerical issues
-            if not (np.isfinite(pl) and np.isfinite(pu)):
-                print(f"  Non-finite values in recentering at iteration {i+1}")
+            # Safeguard: ensure valid bounds
+            if l_new <= 0 or l_new >= u_new or not np.isfinite(l_new):
                 break
             
+            l = l_new
+            u = u_new
+            
+        elif degree == 5:
+            a, b, c = optimal_quintic(l_effective, u)
+            
+            # Recenter around 1 with respect to [l0, u]
+            pl = a * l0 + b * l0**3 + c * l0**5
+            pu = a * u + b * u**3 + c * u**5
             rescalar = 2 / (pl + pu)
+            a *= rescalar
+            b *= rescalar
+            c *= rescalar
             
-            a_final = a * rescalar
-            b_final = b * rescalar
-            c_final = c * rescalar
-            d_final = d * rescalar
+            # Apply safety factor
+            if safety != 1.0:
+                a /= safety
+                b /= safety**3
+                c /= safety**5
             
-            coeffs_list.append((a_final, b_final, c_final, d_final))
+            coefficients.append((float(a), float(b), float(c)))
             
-            # Update bounds
-            l_new = a*l + b*l**3 + c*l**5 + d*l**7
-        
-        # Safeguard: ensure l stays in valid range
-        if l_new <= 0 or l_new >= u or not np.isfinite(l_new):
-            print(f"  Invalid l_new = {l_new} at iteration {i+1}, stopping")
-            break
-        
-        l = l_new
-        u = 2 - l
-        
-        print(f"Iteration {i+1}: l = {l:.6f}, u = {u:.6f}")
+            # Update bounds for next iteration
+            l_new = a * l + b * l**3 + c * l**5
+            u_new = 2 - l_new
+            
+            # Safeguard: ensure valid bounds
+            if l_new <= 0 or l_new >= u_new or not np.isfinite(l_new):
+                break
+            
+            l = l_new
+            u = u_new
+            
+        else:  # degree == 7
+            a, b, c, d = optimal_septic(l_effective, u)
+            
+            # Recenter around 1 with respect to [l0, u]
+            pl = a * l0 + b * l0**3 + c * l0**5 + d * l0**7
+            pu = a * u + b * u**3 + c * u**5 + d * u**7
+            rescalar = 2 / (pl + pu)
+            a *= rescalar
+            b *= rescalar
+            c *= rescalar
+            d *= rescalar
+            
+            # Apply safety factor
+            if safety != 1.0:
+                a /= safety
+                b /= safety**3
+                c /= safety**5
+                d /= safety**7
+            
+            coefficients.append((float(a), float(b), float(c), float(d)))
+            
+            # Update bounds for next iteration
+            l_new = a * l + b * l**3 + c * l**5 + d * l**7
+            u_new = 2 - l_new
+            
+            # Safeguard: ensure valid bounds
+            if l_new <= 0 or l_new >= u_new or not np.isfinite(l_new):
+                break
+            
+            l = l_new
+            u = u_new
     
-    return coeffs_list
+    return coefficients
 
 
-def print_coefficients_list(coeffs_list, degree):
-    """Print coefficients in the format from Algorithm 1"""
-    print(f"\ncoeffs_list_degree_{degree} = [")
-    for coeffs in coeffs_list:
-        print(f"    {coeffs},")
-    print("]")
-
-
-def generate_all_degrees():
-    """Generate coefficient lists for degrees 3, 5, and 7"""
-    print("=" * 70)
-    print("GENERATING COEFFICIENT SEQUENCES")
-    print("=" * 70)
-    
-    # Degree 3
-    print("\n" + "=" * 70)
-    print("DEGREE 3 (CUBIC)")
-    print("=" * 70)
-    coeffs_3 = generate_coefficient_sequence(degree=3, num_iters=10)
-    print_coefficients_list(coeffs_3, 3)
-    
-    # Degree 5
-    print("\n" + "=" * 70)
-    print("DEGREE 5 (QUINTIC) - Should match paper")
-    print("=" * 70)
-    coeffs_5 = generate_coefficient_sequence(degree=5, num_iters=10)
-    print_coefficients_list(coeffs_5, 5)
-    
-    paper_first = (8.28721201814563, -23.595886519098837, 17.300387312530933)
-    our_first = coeffs_5[0]
-    print(f"\nPaper's first: {paper_first}")
-    print(f"Ours first:    {our_first}")
-    diff = tuple(abs(a - b) for a, b in zip(paper_first, our_first))
-    print(f"Differences:   {diff}")
-    
-    # Degree 7
-    print("\n" + "=" * 70)
-    print("DEGREE 7 (SEPTIC)")
-    print("=" * 70)
-    coeffs_7 = generate_coefficient_sequence(degree=7, num_iters=10)
-    print_coefficients_list(coeffs_7, 7)
-    
-    return coeffs_3, coeffs_5, coeffs_7
-
+# =========================
+#  Example usage
+# =========================
 
 if __name__ == "__main__":
-    coeffs_3, coeffs_5, coeffs_7 = generate_all_degrees()
-    
-    print("\n" + "=" * 70)
-    print("COPY-PASTE FORMAT")
+    print("=" * 70)
+    print("POLAR EXPRESS COEFFICIENT GENERATION")
     print("=" * 70)
     
-    print("\n# Degree 3")
-    print("coeffs_list_d3 = [")
-    for c in coeffs_3:
-        print(f"    {c},")
-    print("]")
+    # Paper's default config (degree 5)
+    print("\nDegree 5 (Paper's config: safety=1.01):")
+    coeffs_5 = optimal_composition(1e-3, 10, cushion=0.02407327424182761, 
+                                    safety=1.01, degree=5)
+    print(f"Generated {len(coeffs_5)} coefficients:")
+    for i, c in enumerate(coeffs_5):
+        print(f"  {i}: {c}")
     
-    print("\n# Degree 5")
-    print("coeffs_list_d5 = [")
-    for c in coeffs_5:
-        print(f"    {c},")
-    print("]")
+    # Degree 5 without safety
+    print("\nDegree 5 (No safety: safety=1.0):")
+    coeffs_5_no_safety = optimal_composition(1e-3, 8, safety=1.0, degree=5)
+    print(f"Generated {len(coeffs_5_no_safety)} coefficients:")
+    for i, c in enumerate(coeffs_5_no_safety):
+        print(f"  {i}: {c}")
     
-    print("\n# Degree 7")
-    print("coeffs_list_d7 = [")
-    for c in coeffs_7:
-        print(f"    {c},")
-    print("]")
+    # Degree 3
+    print("\nDegree 3 (safety=1.0):")
+    coeffs_3 = optimal_composition(1e-3, 8, safety=1.0, degree=3)
+    print(f"Generated {len(coeffs_3)} coefficients:")
+    for i, c in enumerate(coeffs_3):
+        print(f"  {i}: {c}")
+    
+    # Degree 7
+    print("\nDegree 7 (safety=1.01):")
+    coeffs_7 = optimal_composition(1e-3, 8, safety=1.01, degree=7)
+    print(f"Generated {len(coeffs_7)} coefficients:")
+    for i, c in enumerate(coeffs_7):
+        print(f"  {i}: {c}")
+    
+    # print("\n" + "=" * 70)
+    # print("USAGE EXAMPLES")
+    # print("=" * 70)
+    # print("""
+    # # Paper's exact config
+    # coeffs = optimal_composition(1e-3, 10, cushion=0.024, safety=1.01, degree=5)
+    
+    # # Ablation: different degrees
+    # coeffs_3 = optimal_composition(1e-3, 8, degree=3)
+    # coeffs_7 = optimal_composition(1e-3, 8, degree=7)
+    
+    # # Ablation: no safety factor
+    # coeffs_nosafe = optimal_composition(1e-3, 10, safety=1.0, degree=5)
+    
+    # # Ablation: different number of iterations
+    # coeffs_fast = optimal_composition(1e-3, 5, degree=5)
+    # coeffs_slow = optimal_composition(1e-3, 15, degree=5)
+    
+    # # Ablation: different initial bounds
+    # coeffs_tight = optimal_composition(1e-2, 10, degree=5)
+    # coeffs_loose = optimal_composition(1e-4, 10, degree=5)
+    # """)
