@@ -154,16 +154,6 @@ def optimal_composition(l0, num_iters, cushion=0.02407327424182761,
             degree=3: [(a, b), ...]
             degree=5: [(a, b, c), ...]
             degree=7: [(a, b, c, d), ...]
-    
-    Example:
-        # Paper's default config for degree 5
-        coeffs = optimal_composition(1e-3, 10, cushion=0.024, safety=1.01, degree=5)
-        
-        # Degree 3 without safety
-        coeffs_3 = optimal_composition(1e-3, 8, safety=1.0, degree=3)
-        
-        # Degree 7 with safety
-        coeffs_7 = optimal_composition(1e-3, 8, safety=1.01, degree=7)
     """
     assert 0 < l0 <= 1, "l0 must be in (0, 1]"
     assert num_iters >= 1, "num_iters must be >= 1"
@@ -186,6 +176,18 @@ def optimal_composition(l0, num_iters, cushion=0.02407327424182761,
             else:  # degree == 7
                 lim_coeffs = ((35/16)/u, (-35/16)/(u**3), (21/16)/(u**5), (-5/16)/(u**7))
             
+            # Apply safety to limiting form
+            if safety != 1.0:
+                if degree == 3:
+                    a, b = lim_coeffs
+                    lim_coeffs = (a/safety, b/(safety**3))
+                elif degree == 5:
+                    a, b, c = lim_coeffs
+                    lim_coeffs = (a/safety, b/(safety**3), c/(safety**5))
+                else:
+                    a, b, c, d = lim_coeffs
+                    lim_coeffs = (a/safety, b/(safety**3), c/(safety**5), d/(safety**7))
+            
             # Fill remaining iterations with limiting form
             for _ in range(num_iters - i):
                 coefficients.append(lim_coeffs)
@@ -198,43 +200,42 @@ def optimal_composition(l0, num_iters, cushion=0.02407327424182761,
         if degree == 3:
             a, b = optimal_cubic(l_effective, u)
             
-            # Recenter around 1 with respect to [l0, u]
-            pl = a * l0 + b * l0**3
+            # Recenter around 1 with respect to CURRENT [l, u] (not l0!)
+            pl = a * l + b * l**3
             pu = a * u + b * u**3
             rescalar = 2 / (pl + pu)
             a *= rescalar
             b *= rescalar
             
-            # Apply safety factor
+            # Save original coefficients for iteration
+            a_iter, b_iter = a, b
+            
+            # Apply safety factor ONLY to output
             if safety != 1.0:
                 a /= safety
                 b /= safety**3
             
             coefficients.append((float(a), float(b)))
             
-            # Update bounds for next iteration
-            l_new = a * l + b * l**3
-            u_new = 2 - l_new
-            
-            # Safeguard: ensure valid bounds
-            if l_new <= 0 or l_new >= u_new or not np.isfinite(l_new):
-                break
-            
-            l = l_new
-            u = u_new
+            # Update bounds using ORIGINAL (non-safety) coefficients
+            l = a_iter * l + b_iter * l**3
+            u = 2 - l
             
         elif degree == 5:
             a, b, c = optimal_quintic(l_effective, u)
             
-            # Recenter around 1 with respect to [l0, u]
-            pl = a * l0 + b * l0**3 + c * l0**5
+            # Recenter around 1 with respect to CURRENT [l, u]
+            pl = a * l + b * l**3 + c * l**5
             pu = a * u + b * u**3 + c * u**5
             rescalar = 2 / (pl + pu)
             a *= rescalar
             b *= rescalar
             c *= rescalar
             
-            # Apply safety factor
+            # Save original coefficients for iteration
+            a_iter, b_iter, c_iter = a, b, c
+            
+            # Apply safety factor ONLY to output
             if safety != 1.0:
                 a /= safety
                 b /= safety**3
@@ -242,22 +243,15 @@ def optimal_composition(l0, num_iters, cushion=0.02407327424182761,
             
             coefficients.append((float(a), float(b), float(c)))
             
-            # Update bounds for next iteration
-            l_new = a * l + b * l**3 + c * l**5
-            u_new = 2 - l_new
-            
-            # Safeguard: ensure valid bounds
-            if l_new <= 0 or l_new >= u_new or not np.isfinite(l_new):
-                break
-            
-            l = l_new
-            u = u_new
+            # Update bounds using ORIGINAL coefficients
+            l = a_iter * l + b_iter * l**3 + c_iter * l**5
+            u = 2 - l
             
         else:  # degree == 7
             a, b, c, d = optimal_septic(l_effective, u)
             
-            # Recenter around 1 with respect to [l0, u]
-            pl = a * l0 + b * l0**3 + c * l0**5 + d * l0**7
+            # Recenter around 1 with respect to CURRENT [l, u]
+            pl = a * l + b * l**3 + c * l**5 + d * l**7
             pu = a * u + b * u**3 + c * u**5 + d * u**7
             rescalar = 2 / (pl + pu)
             a *= rescalar
@@ -265,7 +259,10 @@ def optimal_composition(l0, num_iters, cushion=0.02407327424182761,
             c *= rescalar
             d *= rescalar
             
-            # Apply safety factor
+            # Save original coefficients for iteration
+            a_iter, b_iter, c_iter, d_iter = a, b, c, d
+            
+            # Apply safety factor ONLY to output
             if safety != 1.0:
                 a /= safety
                 b /= safety**3
@@ -274,16 +271,9 @@ def optimal_composition(l0, num_iters, cushion=0.02407327424182761,
             
             coefficients.append((float(a), float(b), float(c), float(d)))
             
-            # Update bounds for next iteration
-            l_new = a * l + b * l**3 + c * l**5 + d * l**7
-            u_new = 2 - l_new
-            
-            # Safeguard: ensure valid bounds
-            if l_new <= 0 or l_new >= u_new or not np.isfinite(l_new):
-                break
-            
-            l = l_new
-            u = u_new
+            # Update bounds using ORIGINAL coefficients
+            l = a_iter * l + b_iter * l**3 + c_iter * l**5 + d_iter * l**7
+            u = 2 - l
     
     return coefficients
 
@@ -305,46 +295,31 @@ if __name__ == "__main__":
     for i, c in enumerate(coeffs_5):
         print(f"  {i}: {c}")
     
+    # Compare first coefficient with paper
+    paper_first = (8.28721201814563, -23.595886519098837, 17.300387312530933)
+    our_first = coeffs_5[0]
+    print(f"\nPaper's first: {paper_first}")
+    print(f"Our first:     {our_first}")
+    diffs = tuple(abs(a - b) for a, b in zip(paper_first, our_first))
+    print(f"Differences:   {diffs}")
+    
     # Degree 5 without safety
     print("\nDegree 5 (No safety: safety=1.0):")
-    coeffs_5_no_safety = optimal_composition(1e-3, 8, safety=1.0, degree=5)
+    coeffs_5_no_safety = optimal_composition(1e-3, 10, safety=1.0, degree=5)
     print(f"Generated {len(coeffs_5_no_safety)} coefficients:")
     for i, c in enumerate(coeffs_5_no_safety):
         print(f"  {i}: {c}")
     
     # Degree 3
     print("\nDegree 3 (safety=1.0):")
-    coeffs_3 = optimal_composition(1e-3, 8, safety=1.0, degree=3)
+    coeffs_3 = optimal_composition(1e-3, 10, safety=1.0, degree=3)
     print(f"Generated {len(coeffs_3)} coefficients:")
     for i, c in enumerate(coeffs_3):
         print(f"  {i}: {c}")
     
     # Degree 7
     print("\nDegree 7 (safety=1.01):")
-    coeffs_7 = optimal_composition(1e-3, 8, safety=1.01, degree=7)
+    coeffs_7 = optimal_composition(1e-3, 10, cushion=0.02407327424182761, safety=1.00, degree=7)
     print(f"Generated {len(coeffs_7)} coefficients:")
     for i, c in enumerate(coeffs_7):
         print(f"  {i}: {c}")
-    
-    # print("\n" + "=" * 70)
-    # print("USAGE EXAMPLES")
-    # print("=" * 70)
-    # print("""
-    # # Paper's exact config
-    # coeffs = optimal_composition(1e-3, 10, cushion=0.024, safety=1.01, degree=5)
-    
-    # # Ablation: different degrees
-    # coeffs_3 = optimal_composition(1e-3, 8, degree=3)
-    # coeffs_7 = optimal_composition(1e-3, 8, degree=7)
-    
-    # # Ablation: no safety factor
-    # coeffs_nosafe = optimal_composition(1e-3, 10, safety=1.0, degree=5)
-    
-    # # Ablation: different number of iterations
-    # coeffs_fast = optimal_composition(1e-3, 5, degree=5)
-    # coeffs_slow = optimal_composition(1e-3, 15, degree=5)
-    
-    # # Ablation: different initial bounds
-    # coeffs_tight = optimal_composition(1e-2, 10, degree=5)
-    # coeffs_loose = optimal_composition(1e-4, 10, degree=5)
-    # """)
