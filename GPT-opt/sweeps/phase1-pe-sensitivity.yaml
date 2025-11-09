@@ -1,0 +1,72 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase1-pe-sensitivity"
+  
+  # Dataset and model
+  training_data:
+    value: finewebmini
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer base
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (fixed for Phase 1)
+  optimizer_params.args.lr:
+    value: 0.005
+  
+  optimizer_params.args.weight_decay:
+    value: 0.1
+  
+  # PolarExpress method
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  # PolarExpress hyperparameters - THE MAIN SWEEP
+  optimizer_params.args.polar_num_iters:
+    values: [3, 5, 7]
+  
+  optimizer_params.args.polar_safety:
+    values: [1.00, 1.01]
+  
+  optimizer_params.args.polar_cushion:
+    values: [0.024, 0.05]
+  
+  # Newton-Schulz steps (Muon parameter)
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Training parameters
+  training_data.training_params.num_epochs:
+    value: 7
+  
+  training_data.training_params.tokens_processed:
+    value: 524288  # ~500K tokens per step (adjust based on your batch size)
+  
+  # Logging
+  logging_params.log_step:
+    value: 50
+  
+  logging_params.val_step:
+    value: 500
+  
+  logging_params.save_ckpt_step:
+    value: 2000
+  
+  logging_params.wandb.project:
+    value: "cs182-polar-express"
+  
+  logging_params.wandb.tags:
+    value: ["phase1", "sensitivity", "pe-hyperparams"]
+
+# This creates: 3 num_iters × 2 safety × 2 cushion = 12 runs
+# Remove some combinations if you want fewer runs
