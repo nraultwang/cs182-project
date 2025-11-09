@@ -99,7 +99,7 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
 
 
 @torch.compile
-def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None) -> torch.Tensor:
+def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None, return_ortho_info=False) -> torch.Tensor:
     """
     Polar decomposition using polynomial iteration.
     
@@ -108,21 +108,33 @@ def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None) -> torch.Tensor:
         steps: Number of iteration steps
         coeffs_list: Optional list of (a, b, c) coefficient tuples.
                     If None, uses DEFAULT_COEFFS_LIST (8 iterations, safety=1.01)
+        return_ortho_info: If True, return (X, XTX) for computing orthogonality error
     """
     if coeffs_list is None:
         coeffs_list = DEFAULT_COEFFS_LIST
         
     assert G.ndim >= 2
     X = G.bfloat16()  # for speed
-    if G.size(-2) > G.size(-1): X = X.mT  # this reduces FLOPs
+    transposed = G.size(-2) > G.size(-1)
+    if transposed: X = X.mT  # this reduces FLOPs
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.01 +1e-7)
     hs = coeffs_list[:steps] + list( 
         repeat(coeffs_list[-1], steps - len(coeffs_list)))
+    A = None  # Keep track of last A = X @ X.mT
     for a, b, c in hs:
         A = X @ X.mT
         B = b * A + c * A @ A
         X = a * X + B @ X  # X <- aX + bX^3 + cX^5
-    if G.size(-2) > G.size(-1): X = X.mT
+    if transposed: X = X.mT
+    
+    if return_ortho_info and A is not None:
+        # Return X and XTX (which is A if not transposed, or would be X.mT @ X if transposed)
+        if transposed:
+            # Need to compute XTX after transpose
+            XTX = X.mT @ X
+        else:
+            XTX = A  # A is already X @ X.mT from last iteration
+        return X, XTX
     return X
 
 

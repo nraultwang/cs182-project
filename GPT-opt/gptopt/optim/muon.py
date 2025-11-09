@@ -264,7 +264,48 @@ class Muon(torch.optim.Optimizer):
                     # For W_O, we split the gradients into 3 heads and process them separately
 
                 # Use the selected polar factorization method
-                u = self.polar_factorizer(g, group["ns_steps"])
+                import time as time_module
+                pe_start = time_module.time()
+                
+                # Compute orthogonality error every 100 steps using cached XTX
+                if not hasattr(self, '_pe_step_count'):
+                    self._pe_step_count = 0
+                self._pe_step_count += 1
+                compute_ortho = (self._pe_step_count % 100 == 0)
+                
+                # Call PolarExpress with optional orthogonality info
+                # Check if using PolarExpress by seeing if it's a partial of PolarExpress
+                use_polarexpress = (hasattr(self.polar_factorizer, 'func') and 
+                                   self.polar_factorizer.func.__name__ == 'PolarExpress')
+                
+                if compute_ortho and use_polarexpress:
+                    try:
+                        # Request XTX to compute ortho error efficiently
+                        result = self.polar_factorizer(g, group["ns_steps"], return_ortho_info=True)
+                        if isinstance(result, tuple):
+                            u, XTX = result
+                            # Compute ||XTX - I||_F using cached XTX
+                            with torch.no_grad():
+                                u_sample = u if u.ndim == 2 else u[0]
+                                XTX_sample = XTX if XTX.ndim == 2 else XTX[0]
+                                I = torch.eye(XTX_sample.size(0), device=XTX_sample.device, dtype=XTX_sample.dtype)
+                                ortho_err = torch.norm(XTX_sample - I, p='fro').item()
+                                
+                                if not hasattr(self, '_pe_ortho_errs'):
+                                    self._pe_ortho_errs = []
+                                    self._pe_times = []
+                                self._pe_ortho_errs.append(ortho_err)
+                        else:
+                            u = result
+                    except Exception as e:
+                        # Fallback if return_ortho_info not supported
+                        u = self.polar_factorizer(g, group["ns_steps"])
+                else:
+                    u = self.polar_factorizer(g, group["ns_steps"])
+                
+                pe_time = (time_module.time() - pe_start) * 1000  # ms
+                if hasattr(self, '_pe_times'):
+                    self._pe_times.append(pe_time)
                 
                 if self.split_heads and self.state[p].get("is_W_QKV", False):
                     g = g.reshape(old_shape)
