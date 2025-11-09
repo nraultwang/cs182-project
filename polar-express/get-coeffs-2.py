@@ -395,63 +395,162 @@ def analyze_convergence(coeffs_list, l0: float, degree: int):
 
 
 # =========================
+#  Pre-computed coefficient library
+# =========================
+
+def generate_coeffs_library(l0: float = 1e-3, degree: int = 5):
+    """
+    Generate a library of coefficient lists for all common hyperparameter combinations.
+    
+    Args:
+        l0: Initial lower spectral bound
+        degree: Polynomial degree (default 5 for quintic)
+    
+    Returns:
+        Dictionary with keys like 'n3_s1.00_c0.10' mapping to coefficient lists
+        
+    Key format: 'n{num_iters}_s{safety}_c{cushion}'
+        - n: number of iterations (3, 5, 7)
+        - s: safety factor (1.00, 1.01)
+        - c: cushion (0.10, 0.05, 0.024)
+    """
+    num_iters_options = [3, 5, 7]
+    safety_options = [1.0, 1.01]
+    cushion_options = [0.1, 0.05, 0.02407327424182761]
+    
+    coeffs_library = {}
+    
+    for num_iters in num_iters_options:
+        for safety in safety_options:
+            for cushion in cushion_options:
+                # Create readable key
+                # Format cushion to distinguish the three values
+                if abs(cushion - 0.1) < 1e-10:
+                    c_str = "0.10"
+                elif abs(cushion - 0.05) < 1e-10:
+                    c_str = "0.05"
+                else:
+                    c_str = "0.024"  # Paper's value
+                
+                key = f"n{num_iters}_s{safety:.2f}_c{c_str}"
+                
+                # Generate coefficients
+                coeffs = optimal_composition(
+                    l0=l0,
+                    num_iters=num_iters,
+                    cushion=cushion,
+                    safety=safety,
+                    degree=degree
+                )
+                
+                coeffs_library[key] = coeffs
+    
+    return coeffs_library
+
+
+def get_coeffs(num_iters: int, safety: float, cushion: float, 
+               coeffs_library: dict = None, l0: float = 1e-3, degree: int = 5):
+    """
+    Get coefficient list from library or generate on-the-fly.
+    
+    Args:
+        num_iters: Number of iterations (3, 5, or 7)
+        safety: Safety factor (1.0 or 1.01)
+        cushion: Cushion factor (0.1, 0.05, or 0.024...)
+        coeffs_library: Pre-computed library (optional, will generate if None)
+        l0: Initial lower bound
+        degree: Polynomial degree
+    
+    Returns:
+        List of coefficient tuples
+    """
+    # Format key
+    if abs(cushion - 0.1) < 1e-10:
+        c_str = "0.10"
+    elif abs(cushion - 0.05) < 1e-10:
+        c_str = "0.05"
+    else:
+        c_str = "0.024"
+    
+    key = f"n{num_iters}_s{safety:.2f}_c{c_str}"
+    
+    # Try to get from library
+    if coeffs_library is not None and key in coeffs_library:
+        return coeffs_library[key]
+    
+    # Generate on-the-fly if not in library
+    return optimal_composition(l0=l0, num_iters=num_iters, cushion=cushion, 
+                              safety=safety, degree=degree)
+
+
+# =========================
 #  Example usage
 # =========================
 
 if __name__ == "__main__":
-    # Faithful-ish PE config (close to paper)
+    # Generate library of all combinations
     print("=" * 70)
-    print("QUINTIC COEFFICIENTS - WITH SAFETY FACTOR (1.01)")
+    print("GENERATING COEFFICIENT LIBRARY")
     print("=" * 70)
-    coeffs_5 = optimal_composition(
-        l0=1e-3,
-        num_iters=10,  # Extended to show limiting form
-        cushion=0.02407327424182761,
-        safety=1.01,
-        degree=5,
-    )
-    print("Quintic coeffs (safety applied to all except last):")
-    for i, cfs in enumerate(coeffs_5, 1):
-        print(f"Iter {i}: {cfs}")
     
-    # Analyze convergence
-    intervals, errors = analyze_convergence(coeffs_5, 1e-3, degree=5)
-    print("\nConvergence analysis:")
-    for i, ((l, u), err) in enumerate(zip(intervals[1:], errors), 1):
-        print(f"Iter {i}: [{l:.6f}, {u:.6f}], error: {err:.6e}")
+    coeffs_library = generate_coeffs_library(l0=1e-3, degree=5)
+    
+    print(f"\nGenerated {len(coeffs_library)} coefficient sets:")
+    for key in sorted(coeffs_library.keys()):
+        num_coeffs = len(coeffs_library[key])
+        print(f"  {key}: {num_coeffs} iterations")
+    
+    # Example: Access specific configuration
+    print("\n" + "=" * 70)
+    print("EXAMPLE: Accessing specific configurations")
+    print("=" * 70)
+    
+    # Example 1: 5 iterations, safety=1.01, cushion=0.024 (paper's default)
+    key1 = "n5_s1.01_c0.024"
+    coeffs_1 = coeffs_library[key1]
+    print(f"\n{key1} (Paper's config):")
+    print(f"  First coeff: {coeffs_1[0]}")
+    print(f"  Last coeff:  {coeffs_1[-1]}")
+    
+    # Example 2: 7 iterations, no safety, cushion=0.1
+    key2 = "n7_s1.00_c0.10"
+    coeffs_2 = coeffs_library[key2]
+    print(f"\n{key2}:")
+    print(f"  First coeff: {coeffs_2[0]}")
+    print(f"  Last coeff:  {coeffs_2[-1]}")
+    
+    # Example 3: Using get_coeffs helper
+    print("\n" + "=" * 70)
+    print("EXAMPLE: Using get_coeffs() helper")
+    print("=" * 70)
+    
+    coeffs_3 = get_coeffs(num_iters=3, safety=1.0, cushion=0.05, 
+                          coeffs_library=coeffs_library)
+    print(f"\nget_coeffs(num_iters=3, safety=1.0, cushion=0.05):")
+    for i, c in enumerate(coeffs_3, 1):
+        print(f"  Iter {i}: {c}")
+    
+    # Show all available keys
+    print("\n" + "=" * 70)
+    print("ALL AVAILABLE KEYS")
+    print("=" * 70)
+    print("\nFormat: n{iters}_s{safety}_c{cushion}")
+    print("\nKeys:")
+    for key in sorted(coeffs_library.keys()):
+        print(f"  '{key}'")
     
     print("\n" + "=" * 70)
-    print("QUINTIC COEFFICIENTS - WITHOUT SAFETY FACTOR (paper's raw values)")
+    print("USAGE IN YOUR CODE")
     print("=" * 70)
-    coeffs_no_safety = optimal_composition(
-        l0=1e-3,
-        num_iters=10,  # Extended to show limiting form
-        cushion=0.02407327424182761,
-        safety=1.0,  # No safety factor
-        degree=5,
-    )
-    print("Quintic coeffs (no safety factor):")
-    for i, cfs in enumerate(coeffs_no_safety, 1):
-        print(f"Iter {i}: {cfs}")
+    print("""
+# One-time setup: Generate the library
+coeffs_library = generate_coeffs_library()
 
-    coeffs_7 = optimal_composition(
-        l0=1e-3,
-        num_iters=5,  # Extended to show limiting form
-        cushion=0.02407327424182761,
-        safety=1.0,  # No safety factor
-        degree=7,
-    )
-    print("Cubic coeffs (no safety factor):")
-    for i, cfs in enumerate(coeffs_7, 1):
-        print(f"Iter {i}: {cfs}")
+# Access by key:
+my_coeffs = coeffs_library['n5_s1.01_c0.024']
+
+# Or use helper function:
+my_coeffs = get_coeffs(num_iters=5, safety=1.01, cushion=0.02407327424182761, 
+                       coeffs_library=coeffs_library)
+""")
     
-    coeffs_3 = optimal_composition(
-        l0=1e-3,
-        num_iters=5,  # Extended to show limiting form
-        cushion=0.02407327424182761,
-        safety=1.0,  # No safety factor
-        degree=3,
-    )
-    print("Cubic coeffs (no safety factor):")
-    for i, cfs in enumerate(coeffs_3, 1):
-        print(f"Iter {i}: {cfs}")
