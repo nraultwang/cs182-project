@@ -3,15 +3,29 @@ import torch
 import os
 import warnings
 import uuid
+import sys
+import importlib.util
 
-# # How to generate these lists:
-# from itertools import islice
-# from matsign.methods import OursFixedL, Ours
-# hs = list(OursFixedL(l=1e-3, cushion=1e-1, center_squred_svs=False, max_iters=10)(1e-3))  # centered
-# hs = list(islice(Ours(cushion=1e-1, center_squred_svs=False).uncentered_sequence(1e-3), 10))  # uncentered
-# [tuple(float(x) for x in h.coef) for h in hs]
+# Import coefficient generation from polar-express
+# Use importlib to handle the hyphenated filename
+try:
+    coeffs_file_path = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'polar-express', 'get-coeffs-2.py')
+    coeffs_file_path = os.path.abspath(coeffs_file_path)
+    
+    spec = importlib.util.spec_from_file_location("get_coeffs_2", coeffs_file_path)
+    get_coeffs_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(get_coeffs_module)
+    
+    generate_coeffs_library = get_coeffs_module.generate_coeffs_library
+    # Generate coefficient library once at module load
+    COEFFS_LIBRARY = generate_coeffs_library(l0=1e-3, degree=5)
+except (ImportError, FileNotFoundError, AttributeError) as e:
+    warnings.warn(f"Could not import coefficient library from polar-express/get-coeffs-2.py: {e}")
+    COEFFS_LIBRARY = None
 
-coeffs_list = [
+# Default coefficients (paper's 8-iteration config with safety factor)
+# These match: num_iters=8, safety=1.01, cushion=0.024
+DEFAULT_COEFFS_LIST = [
     (8.28721201814563, -23.595886519098837, 17.300387312530933),
     (4.107059111542203, -2.9478499167379106, 0.5448431082926601),
     (3.9486908534822946, -2.908902115962949, 0.5518191394370137),
@@ -19,14 +33,85 @@ coeffs_list = [
     (2.300652019954817, -1.6689039845747493, 0.4188073119525673),
     (1.891301407787398, -1.2679958271945868, 0.37680408948524835),
     (1.8750014808534479, -1.2500016453999487, 0.3750001645474248),
-    (1.875, -1.25, 0.375),  # subsequent coeffs equal this numerically
+    (1.875, -1.25, 0.375),  # limiting form
 ]
-# safety factor for numerical stability (but exclude last polynomial)
-coeffs_list = [(a / 1.01, b / 1.01**3, c / 1.01**5)
-                for (a, b, c) in coeffs_list[:-1]] + [coeffs_list[-1]]
+# safety factor applied (all but last)
+DEFAULT_COEFFS_LIST = [(a / 1.01, b / 1.01**3, c / 1.01**5)
+                       for (a, b, c) in DEFAULT_COEFFS_LIST[:-1]] + [DEFAULT_COEFFS_LIST[-1]]
+
+
+def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
+    """
+    Get coefficient list for specified configuration.
+    
+    Args:
+        num_iters: Number of iterations (3, 5, or 7). If None, use default.
+        safety: Safety factor (1.0 or 1.01)
+        cushion: Cushion parameter. Library provides:
+                 - 0.1 (or close)
+                 - 0.05 (or close)
+                 - 0.024 or 0.02407327424182761 (paper's precise value)
+    
+    Returns:
+        List of (a, b, c) coefficient tuples
+    
+    Note:
+        The library uses precise cushion value 0.02407327424182761 but keys it as "0.024".
+        Values within 0.001 of 0.024 will match this key (e.g., 0.024, 0.02407..., 0.0245).
+    """
+    if num_iters is None:
+        # Use default 8-iteration config
+        return DEFAULT_COEFFS_LIST
+    
+    if COEFFS_LIBRARY is None:
+        warnings.warn("Coefficient library not available, using default coefficients")
+        return DEFAULT_COEFFS_LIST
+    
+    # Format cushion to match dictionary key format EXACTLY as in get-coeffs-2.py
+    # The library uses the precise value 0.02407327424182761 but keys it as "0.024"
+    if abs(cushion - 0.1) < 1e-10:
+        c_str = "0.10"  # Note: with trailing zero
+    elif abs(cushion - 0.05) < 1e-10:
+        c_str = "0.05"
+    elif abs(cushion - 0.024) < 1e-3:
+        # Accept both 0.024 and the precise value 0.02407327424182761
+        c_str = "0.024"
+    else:
+        # For arbitrary cushion values, format with full precision
+        c_str = f"{cushion:.6f}".rstrip('0').rstrip('.')
+    
+    # Format safety with 2 decimals to match library format
+    s_str = f"{safety:.2f}"
+    
+    key = f"n{num_iters}_s{s_str}_c{c_str}"
+    
+    if key not in COEFFS_LIBRARY:
+        # Try alternative formatting in case of rounding
+        available_keys = [k for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iters}_s{s_str}_")]
+        warnings.warn(
+            f"Coefficient config '{key}' not found in library. "
+            f"Available configs for n={num_iters}, s={s_str}: {available_keys}. "
+            f"Using default coefficients."
+        )
+        return DEFAULT_COEFFS_LIST
+    
+    return COEFFS_LIBRARY[key]
+
 
 @torch.compile
-def PolarExpress(G: torch.Tensor, steps: int) -> torch.Tensor:
+def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None) -> torch.Tensor:
+    """
+    Polar decomposition using polynomial iteration.
+    
+    Args:
+        G: Input gradient matrix
+        steps: Number of iteration steps
+        coeffs_list: Optional list of (a, b, c) coefficient tuples.
+                    If None, uses DEFAULT_COEFFS_LIST (8 iterations, safety=1.01)
+    """
+    if coeffs_list is None:
+        coeffs_list = DEFAULT_COEFFS_LIST
+        
     assert G.ndim >= 2
     X = G.bfloat16()  # for speed
     if G.size(-2) > G.size(-1): X = X.mT  # this reduces FLOPs
@@ -42,7 +127,20 @@ def PolarExpress(G: torch.Tensor, steps: int) -> torch.Tensor:
 
 
 @torch.compile
-def FastApplyPolarExpress(G: torch.Tensor, steps: int, restart_interval: int, shift_eps: float = 0) -> torch.Tensor:
+def FastApplyPolarExpress(G: torch.Tensor, steps: int, restart_interval: int, shift_eps: float = 0, coeffs_list=None) -> torch.Tensor:
+    """
+    Fast polar decomposition with restarts and numerical stability.
+    
+    Args:
+        G: Input gradient matrix
+        steps: Number of iteration steps
+        restart_interval: How often to restart (apply Q and reset)
+        shift_eps: Numerical stability shift for Y = XX^T
+        coeffs_list: Optional coefficient list (uses DEFAULT_COEFFS_LIST if None)
+    """
+    if coeffs_list is None:
+        coeffs_list = DEFAULT_COEFFS_LIST
+        
     assert G.ndim >= 2
     X = G.double()
     if G.size(-2) > G.size(-1): X = X.mT  # this reduces FLOPs

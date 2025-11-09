@@ -167,6 +167,9 @@ def get_optimizer(opt_config: dict, lr = 1e-3) -> Tuple[torch.optim.Optimizer, d
                   'ns_steps': opt_config.get('ns_steps', 5),
                   'rms_scaling': opt_config.get('rms_scaling', True),
                   'polar_method': 'polarexpress',
+                  'polar_num_iters': opt_config.get('polar_num_iters', None),
+                  'polar_safety': opt_config.get('polar_safety', 1.01),
+                  'polar_cushion': opt_config.get('polar_cushion', 0.024),
                   'polar_params': opt_config.get('polar_params', {})
                   }        
 

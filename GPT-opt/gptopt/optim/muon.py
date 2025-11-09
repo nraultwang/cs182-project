@@ -114,10 +114,16 @@ class Muon(torch.optim.Optimizer):
                  adamw_eps=1e-8,
                  split_heads=False,
                  nheads=None,
+                 polar_num_iters=None,
+                 polar_safety=1.01,
+                 polar_cushion=0.024,
                 ):
         """
         Arguments:
-            polar_method: The name of the polar factorization method to use (e.g., "NewtonSchultz", "Keller", "Pole") where PolE = PolarExpress
+            polar_method: The name of the polar factorization method to use (e.g., "Keller", "polarexpress")
+            polar_num_iters: Number of iterations for PolarExpress coefficients (3, 5, or 7). None uses default 8-iter config.
+            polar_safety: Safety factor for PolarExpress (1.0 or 1.01)
+            polar_cushion: Cushion parameter for PolarExpress (0.1, 0.05, or 0.024)
         """
         defaults = dict(
                 lr=lr,
@@ -163,6 +169,11 @@ class Muon(torch.optim.Optimizer):
             # Do not use Muon for parameters in adamw_params
             self.state[p]["use_muon"] = False
 
+        # Store PolarExpress configuration
+        self.polar_num_iters = polar_num_iters
+        self.polar_safety = polar_safety
+        self.polar_cushion = polar_cushion
+        
         # Instantiate the polar factorization method
         self.polar_factorizer = self._initialize_polar_factorizer(polar_method)
 
@@ -173,7 +184,15 @@ class Muon(torch.optim.Optimizer):
         elif polar_method == "Jiacheng":
             return jiacheng
         elif polar_method == "polarexpress":
-            return PolarExpress 
+            # Get coefficients for the specified configuration
+            from gptopt.optim.polar_express import get_coeffs_for_config
+            coeffs = get_coeffs_for_config(
+                num_iters=self.polar_num_iters,
+                safety=self.polar_safety,
+                cushion=self.polar_cushion
+            )
+            # Return a partial function with the coefficients bound
+            return partial(PolarExpress, coeffs_list=coeffs)
         elif polar_method == "fast_polarexpress":
             return partial(FastApplyPolarExpress, restart_interval=3, shift_eps=1e-3)
         else:
