@@ -37,44 +37,57 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
         if compute_svd:
             # Sample 3 representative matrices: first, middle, last
             svd_targets = [
-                ('h.0.attn.c_attn.weight', 'layer0_qkv'),   # First layer attention
-                ('h.5.attn.c_attn.weight', 'layer5_qkv'),   # Middle layer attention
-                ('h.11.attn.c_attn.weight', 'layer11_qkv'), # Last layer attention
+                ('h.0.attn.c_attn.weight', 'layer0'),   # First layer attention
+                ('h.5.attn.c_attn.weight', 'layer5'),   # Middle layer attention
+                ('h.11.attn.c_attn.weight', 'layer11'), # Last layer attention
             ]
             
-            for target_name, label in svd_targets:
+            # Helper function to compute SVD metrics
+            def compute_svd_metrics(matrix, prefix):
+                """Compute SVD metrics for a matrix and store with given prefix."""
+                U, S, Vh = torch.linalg.svd(matrix, full_matrices=False)
+                
+                sigma_max = S[0].item()
+                sigma_min = S[-1].item()
+                condition_number = sigma_max / (sigma_min + 1e-10)
+                effective_rank = (S.sum() / (sigma_max + 1e-10)).item()
+                
+                metrics[f'{prefix}/sigma_max'] = sigma_max
+                metrics[f'{prefix}/sigma_min'] = sigma_min
+                metrics[f'{prefix}/condition_number'] = condition_number
+                metrics[f'{prefix}/effective_rank'] = effective_rank
+                
+                if len(S) > 1:
+                    metrics[f'{prefix}/spectral_gap'] = (S[0] / S[1]).item()
+            
+            for target_name, layer_label in svd_targets:
                 try:
                     for name, param in model.named_parameters():
                         if target_name in name:
-                            # Compute SVD
-                            U, S, Vh = torch.linalg.svd(param.data, full_matrices=False)
+                            W = param.data
                             
-                            # Key spectral metrics
-                            sigma_max = S[0].item()
-                            sigma_min = S[-1].item()
-                            condition_number = sigma_max / (sigma_min + 1e-10)
-                            effective_rank = (S.sum() / (sigma_max + 1e-10)).item()
+                            # Reshape if needed
+                            if W.ndim > 2:
+                                W = W.view(W.size(0), -1)
                             
-                            # Spectral decay: what fraction of energy in top k singular values
-                            S_cumsum = torch.cumsum(S, dim=0)
-                            S_total = S.sum()
-                            energy_top10 = (S_cumsum[min(9, len(S)-1)] / S_total).item()
-                            energy_top50 = (S_cumsum[min(49, len(S)-1)] / S_total).item()
-                            
-                            metrics[f'svd/{label}/sigma_max'] = sigma_max
-                            metrics[f'svd/{label}/sigma_min'] = sigma_min
-                            metrics[f'svd/{label}/condition_number'] = condition_number
-                            metrics[f'svd/{label}/effective_rank'] = effective_rank
-                            metrics[f'svd/{label}/energy_top10'] = energy_top10
-                            metrics[f'svd/{label}/energy_top50'] = energy_top50
-                            
-                            # Spectral gap (ratio of 1st to 2nd singular value)
-                            if len(S) > 1:
-                                metrics[f'svd/{label}/spectral_gap'] = (S[0] / S[1]).item()
+                            # Split QKV weight matrix into Q, K, V (each 768 × 768)
+                            # c_attn.weight is [2304, 768] = [Q; K; V] stacked vertically
+                            if W.size(0) == 2304 and W.size(1) == 768:
+                                Q = W[0:768, :]      # First 768 rows
+                                K = W[768:1536, :]   # Middle 768 rows
+                                V = W[1536:2304, :]  # Last 768 rows
+                                
+                                # Compute SVD for each projection
+                                compute_svd_metrics(Q, f'svd/{layer_label}_q')
+                                compute_svd_metrics(K, f'svd/{layer_label}_k')
+                                compute_svd_metrics(V, f'svd/{layer_label}_v')
+                            else:
+                                # Fallback: compute on full matrix if not standard QKV shape
+                                compute_svd_metrics(W, f'svd/{layer_label}_qkv')
                             
                             break  # Found the target, move to next
                 except Exception as e:
-                    print(f"Warning: Could not compute SVD for {label}: {e}")
+                    print(f"Warning: Could not compute SVD for {layer_label}: {e}")
             
             # Also compute SVD on momentum buffers (updates) if using Muon
             # This directly measures what PolarExpress operates on
@@ -94,7 +107,7 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                                     continue
                                 
                                 # Check if this is one of our target layers
-                                for target_name, label in svd_targets:
+                                for target_name, layer_label in svd_targets:
                                     if target_name in param_name:
                                         state = optimizer.state[p]
                                         if 'momentum_buffer' in state:
@@ -104,27 +117,72 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                                             if buf.ndim > 2:
                                                 buf = buf.view(buf.size(0), -1)
                                             
-                                            # Compute SVD on the momentum buffer
-                                            U_buf, S_buf, Vh_buf = torch.linalg.svd(buf, full_matrices=False)
-                                            
-                                            # Key spectral metrics for updates
-                                            sigma_max_buf = S_buf[0].item()
-                                            sigma_min_buf = S_buf[-1].item()
-                                            condition_number_buf = sigma_max_buf / (sigma_min_buf + 1e-10)
-                                            effective_rank_buf = (S_buf.sum() / (sigma_max_buf + 1e-10)).item()
-                                            
-                                            # Store with "update" prefix to distinguish from weight SVD
-                                            metrics[f'svd/update_{label}/sigma_max'] = sigma_max_buf
-                                            metrics[f'svd/update_{label}/sigma_min'] = sigma_min_buf
-                                            metrics[f'svd/update_{label}/condition_number'] = condition_number_buf
-                                            metrics[f'svd/update_{label}/effective_rank'] = effective_rank_buf
-                                            
-                                            if len(S_buf) > 1:
-                                                metrics[f'svd/update_{label}/spectral_gap'] = (S_buf[0] / S_buf[1]).item()
+                                            # Split momentum buffer into Q, K, V updates
+                                            # Note: Even though PE processes stacked (2304×768) when split_heads=False,
+                                            # we still want to measure per-projection conditioning for analysis
+                                            if buf.size(0) == 2304 and buf.size(1) == 768:
+                                                Q_buf = buf[0:768, :]      # Q update
+                                                K_buf = buf[768:1536, :]   # K update
+                                                V_buf = buf[1536:2304, :]  # V update
+                                                
+                                                # Compute SVD for each update projection
+                                                compute_svd_metrics(Q_buf, f'svd/update_{layer_label}_q')
+                                                compute_svd_metrics(K_buf, f'svd/update_{layer_label}_k')
+                                                compute_svd_metrics(V_buf, f'svd/update_{layer_label}_v')
+                                                
+                                                # Also compute on full stacked buffer (what PE actually sees)
+                                                compute_svd_metrics(buf, f'svd/update_{layer_label}_stacked')
+                                            else:
+                                                # Fallback: compute on full buffer
+                                                compute_svd_metrics(buf, f'svd/update_{layer_label}')
                                         
                                         break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute SVD for momentum buffers: {e}")
+            
+            # Compute weight orthogonality: ||W^T W - I||_F
+            # This measures if weights maintain orthogonality over training
+            def compute_orthogonality(matrix, prefix):
+                """Compute orthogonality error for a matrix."""
+                # For non-square matrices, compute W^T W (smaller dimension)
+                if matrix.size(0) > matrix.size(1):
+                    WTW = matrix.T @ matrix  # cols × cols
+                else:
+                    WTW = matrix @ matrix.T  # rows × rows
+                
+                I = torch.eye(WTW.size(0), device=WTW.device, dtype=WTW.dtype)
+                ortho_err = torch.norm(WTW - I, p='fro').item()
+                ortho_err_normalized = ortho_err / WTW.size(0)
+                
+                metrics[f'{prefix}/err'] = ortho_err
+                metrics[f'{prefix}/err_normalized'] = ortho_err_normalized
+            
+            for target_name, layer_label in svd_targets:
+                try:
+                    for name, param in model.named_parameters():
+                        if target_name in name:
+                            W = param.data
+                            
+                            # Reshape if needed
+                            if W.ndim > 2:
+                                W = W.view(W.size(0), -1)
+                            
+                            # Split QKV and compute orthogonality for each
+                            if W.size(0) == 2304 and W.size(1) == 768:
+                                Q = W[0:768, :]
+                                K = W[768:1536, :]
+                                V = W[1536:2304, :]
+                                
+                                compute_orthogonality(Q, f'ortho/{layer_label}_q')
+                                compute_orthogonality(K, f'ortho/{layer_label}_k')
+                                compute_orthogonality(V, f'ortho/{layer_label}_v')
+                            else:
+                                # Fallback for non-standard shapes
+                                compute_orthogonality(W, f'ortho/{layer_label}')
+                            
+                            break  # Found the target, move to next
+                except Exception as e:
+                    print(f"Warning: Could not compute orthogonality for {layer_label}: {e}")
     
     with torch.no_grad():
         # C) Attention health - sample from first, middle, and last layers

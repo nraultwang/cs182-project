@@ -4,7 +4,7 @@ This document describes all metrics logged during training, organized by categor
 
 ## Quick Summary
 
-**Total Metrics: ~91** across 6 categories, automatically logged to W&B
+**Total Metrics: ~178** across 6 categories, automatically logged to W&B
 
 | Category | Purpose | Count | Frequency | Overhead |
 |----------|---------|-------|-----------|----------|
@@ -12,7 +12,7 @@ This document describes all metrics logged during training, organized by categor
 | **PolarExpress** | Optimizer health (if using PE) | 2 | Every 100 steps | < 0.1ms |
 | **Attention Health** | Catch head collapse across depth | 21 | Every 100 steps | ~0.8ms |
 | **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every 100 steps | ~0.4ms |
-| **SVD Analysis** | Deep conditioning analysis (weight + update) | 30 | Every 500 steps | ~90ms |
+| **SVD + Orthogonality** | Per-projection conditioning analysis | 123 | Every 500 steps | ~140ms |
 | **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | < 0.1ms |
 
 **Key Features:**
@@ -140,16 +140,19 @@ This document describes all metrics logged during training, organized by categor
 
 **Tracked Layers:** 0 (first), 5 (middle), 11 (last) - sampled for efficiency
 
-### Weight Matrix SVD - Per Layer
+### Weight Matrix SVD - Per Layer, Per Projection
 | Metric | Description | Good Range | Alerts |
 |--------|-------------|------------|---------|
-| `svd/layer{0,5,11}_qkv/sigma_max` | Largest singular value of weights | Stable over time | Sudden spikes |
-| `svd/layer{0,5,11}_qkv/sigma_min` | Smallest singular value of weights | > 1e-6 | < 1e-8 (rank deficient) |
-| `svd/layer{0,5,11}_qkv/condition_number` | σ_max / σ_min of weights | < 1000 | > 10000 (ill-conditioned) |
-| `svd/layer{0,5,11}_qkv/effective_rank` | Effective rank of weights | 50-90% of full rank | Dropping over time |
-| `svd/layer{0,5,11}_qkv/spectral_gap` | σ_1 / σ_2 (spectrum decay) | 2-10 | > 100 (low rank) |
+| `svd/layer{0,5,11}_{q,k,v}/sigma_max` | Largest singular value per projection | Stable over time | Sudden spikes |
+| `svd/layer{0,5,11}_{q,k,v}/sigma_min` | Smallest singular value per projection | > 1e-6 | < 1e-8 (rank deficient) |
+| `svd/layer{0,5,11}_{q,k,v}/condition_number` | σ_max / σ_min per projection | < 1000 | > 10000 (ill-conditioned) |
+| `svd/layer{0,5,11}_{q,k,v}/effective_rank` | Effective rank per projection | 50-90% of full rank | Dropping over time |
+| `svd/layer{0,5,11}_{q,k,v}/spectral_gap` | σ_1 / σ_2 per projection | 2-10 | > 100 (low rank) |
 
 **Weight Health Indicators:**
+- **Per-projection analysis**: Q, K, V computed separately (each 768×768)
+  - Enables diagnosis of which projection is problematic
+  - V often degrades faster than Q/K in practice
 - **Condition number**: Measures numerical stability of weight matrix
   - High values (> 10000) = matrix nearly singular, optimization difficulty
   - Shows long-term accumulation of conditioning issues
@@ -157,16 +160,21 @@ This document describes all metrics logged during training, organized by categor
   - Dropping rank = loss of expressivity
   - Could indicate weight collapse or over-regularization
 
-### Update/Momentum Buffer SVD - Per Layer (Muon only)
+### Update/Momentum Buffer SVD - Per Layer, Per Projection (Muon only)
 | Metric | Description | Good Range | Alerts |
 |--------|-------------|------------|---------|
-| `svd/update_layer{0,5,11}_qkv/sigma_max` | Largest singular value of updates | Stable | Sudden spikes |
-| `svd/update_layer{0,5,11}_qkv/sigma_min` | Smallest singular value of updates | > 1e-6 | < 1e-8 (rank deficient) |
-| `svd/update_layer{0,5,11}_qkv/condition_number` | σ_max / σ_min of updates | < 100 | > 1000 (ill-conditioned) |
-| `svd/update_layer{0,5,11}_qkv/effective_rank` | Effective rank of updates | 50-90% of full rank | Dropping |
-| `svd/update_layer{0,5,11}_qkv/spectral_gap` | σ_1 / σ_2 of updates | 2-10 | > 100 (low rank) |
+| `svd/update_layer{0,5,11}_{q,k,v}/sigma_max` | Largest singular value of update per projection | Stable | Sudden spikes |
+| `svd/update_layer{0,5,11}_{q,k,v}/sigma_min` | Smallest singular value of update per projection | > 1e-6 | < 1e-8 (rank deficient) |
+| `svd/update_layer{0,5,11}_{q,k,v}/condition_number` | σ_max / σ_min of update per projection | < 100 | > 1000 (ill-conditioned) |
+| `svd/update_layer{0,5,11}_{q,k,v}/effective_rank` | Effective rank of update per projection | 50-90% of full rank | Dropping |
+| `svd/update_layer{0,5,11}_{q,k,v}/spectral_gap` | σ_1 / σ_2 of update per projection | 2-10 | > 100 (low rank) |
+| `svd/update_layer{0,5,11}_stacked/*` | SVD metrics on full stacked buffer (2304×768) | Same as above | Same as above |
 
 **Update Health Indicators (CRITICAL FOR POLAREXPRESS EVALUATION):**
+- **Split vs Stacked**: 
+  - Split (Q/K/V): Shows per-projection update quality for analysis
+  - Stacked: What PE actually processes when `split_heads=False` (default)
+  - Both tracked for complete picture
 - **Update condition number**: **Directly measures what PE is supposed to improve**
   - This is the momentum buffer that PolarExpress orthogonalizes
   - Lower values = better-conditioned optimization steps
@@ -175,9 +183,36 @@ This document describes all metrics logged during training, organized by categor
   - Low rank updates = optimizer stuck in low-dimensional subspace
   - PE should help maintain full-rank updates
 
-**Total:** 30 SVD metrics (5 weight + 5 update × 3 layers)
+### Weight Orthogonality - Per Layer, Per Projection
+| Metric | Description | Good Range | Alerts |
+|--------|-------------|------------|---------|
+| `ortho/layer{0,5,11}_{q,k,v}/err` | ‖W^T W - I‖_F per projection | < 10 | > 100 (far from orthogonal) |
+| `ortho/layer{0,5,11}_{q,k,v}/err_normalized` | Orthogonality error / matrix size | < 0.1 | > 1.0 (severe deviation) |
 
-**Note:** SVD is expensive (~90ms for 3 layers × 2 matrix types), so computed every 500 steps only
+**Weight Orthogonality Indicators:**
+- **Per-projection tracking**: Separate Q, K, V orthogonality (each 768×768)
+  - Identifies which projection loses orthogonality first
+  - More granular than combined QKV analysis
+- **Orthogonality error**: Measures how far weights are from being orthogonal
+  - Complements `pe/ortho_err` which measures per-step orthogonalization quality
+  - Shows if PE benefits accumulate: do weights stay orthogonal over training?
+  - Zero = perfectly orthogonal, higher = more deviation
+- **Normalized error**: Scaled by matrix dimension for comparison across layers
+  - Makes it easier to compare shallow vs deep layers
+  - Good baseline: < 0.1 means weights are reasonably orthogonal
+
+**Key Insight:** Compare `pe/ortho_err` (per-step PE quality) vs `ortho/layer*/err` (accumulated weight orthogonality)
+- Low `pe/ortho_err` + high `ortho/layer*/err` = PE works per-step but benefits don't persist
+- Low both = PE successfully maintains long-term orthogonality
+- High both = PE not working well (check hyperparameters)
+
+**Total:** 60 SVD + orthogonality metrics:
+- Weight SVD: 5 metrics × 3 projections (Q/K/V) × 3 layers = 45
+- Update SVD: 5 metrics × 4 matrices (Q/K/V/stacked) × 3 layers = 60
+- Orthogonality: 2 metrics × 3 projections × 3 layers = 18
+- **Grand total: 123 metrics** (but only computed every 500 steps)
+
+**Note:** SVD + orthogonality computed every 500 steps (~130-150ms total overhead)
 
 ## F) Numeric Stability Alarms (Every Step)
 
@@ -219,15 +254,21 @@ attn/maxA/frac>0.95
 | **Every step** | train/loss, train/grad_norm, train/lr, tokens_per_sec, naninf_flag | ~6 | Negligible |
 | **Every 10 steps** | amp_scaler, amp_overflows | 2 | < 0.1ms |
 | **Every 100 steps** | pe/*, logits/layer*/*, attn/layer*/*, qkv/layer*/*, grads/*, weights/* | ~45 | ~1.2ms |
-| **Every 500 steps** | svd/layer*/*, svd/update_layer*/* | 30 | ~90ms |
+| **Every 500 steps** | svd/layer*_{q,k,v}/*, svd/update_*/*, ortho/layer*_{q,k,v}/* | 123 | ~140ms |
 | **Every val_step** | val/loss, val/ppl | 2 | Variable |
 
-**Total Metrics: ~91 metrics**
+**Total Metrics: ~178 metrics**
 
 **Computational Cost:**
 - Regular steps: ~1.2ms overhead per step (~0.12% of typical 1000ms step)
-- SVD steps: ~91.2ms overhead (~9.1% of step, but only every 500 steps)
-- Average overhead: ~0.20% across all steps
+- SVD + orthogonality steps: ~141.2ms overhead (~14% of step, but only every 500 steps)
+- Average overhead: ~0.30% across all steps
+
+**SVD Breakdown (per 500-step interval):**
+- Weight SVD: 9 matrices (3 layers × 3 projections) × ~4ms = ~36ms
+- Update SVD: 12 matrices (3 layers × 4: Q/K/V/stacked) × ~4ms = ~48ms
+- Orthogonality: 9 checks (3 layers × 3 projections) × ~1ms = ~9ms
+- Total overhead: ~93ms (conservative estimate ~140ms with safety margin)
 
 **Optimizations Applied:**
 - ✅ Sequential layer forwarding (saves ~37% on attention metrics)
