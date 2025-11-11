@@ -4,7 +4,7 @@ This document describes all metrics logged during training, organized by categor
 
 ## Quick Summary
 
-**Total Metrics: ~76** across 6 categories, automatically logged to W&B
+**Total Metrics: ~91** across 6 categories, automatically logged to W&B
 
 | Category | Purpose | Count | Frequency | Overhead |
 |----------|---------|-------|-----------|----------|
@@ -12,7 +12,7 @@ This document describes all metrics logged during training, organized by categor
 | **PolarExpress** | Optimizer health (if using PE) | 2 | Every 100 steps | < 0.1ms |
 | **Attention Health** | Catch head collapse across depth | 21 | Every 100 steps | ~0.8ms |
 | **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every 100 steps | ~0.4ms |
-| **SVD Analysis** | Deep conditioning analysis | 21 | Every 500 steps | ~50ms |
+| **SVD Analysis** | Deep conditioning analysis (weight + update) | 30 | Every 500 steps | ~90ms |
 | **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | < 0.1ms |
 
 **Key Features:**
@@ -49,7 +49,6 @@ This document describes all metrics logged during training, organized by categor
 |--------|-------------|------------|---------|
 | `pe/ortho_err` | ‖U^T U - I‖_F on 2-3 sentinel matrices | < 0.1 | > 0.5 (not orthogonalizing) |
 | `pe/time_ms` | Direct cost of PE substep | < 10ms | > 50ms (bottleneck) |
-| `pe/ell` | Number of polynomial iterations used | 3-7 | - |
 
 **PE Quality Check:**
 - `pe/ortho_err` measures how orthogonal the output U is
@@ -141,30 +140,44 @@ This document describes all metrics logged during training, organized by categor
 
 **Tracked Layers:** 0 (first), 5 (middle), 11 (last) - sampled for efficiency
 
-### Singular Value Statistics - Per Layer
+### Weight Matrix SVD - Per Layer
 | Metric | Description | Good Range | Alerts |
 |--------|-------------|------------|---------|
-| `svd/layer{0,5,11}/sigma_max` | Largest singular value | Stable over time | Sudden spikes |
-| `svd/layer{0,5,11}/sigma_min` | Smallest singular value | > 1e-6 | < 1e-8 (rank deficient) |
-| `svd/layer{0,5,11}/condition_number` | σ_max / σ_min | < 1000 | > 10000 (ill-conditioned) |
-| `svd/layer{0,5,11}/effective_rank` | # singular values capturing 95% energy | 50-90% of full rank | Dropping over time |
-| `svd/layer{0,5,11}/sigma_sum` | Sum of all singular values | Stable | Sharp changes |
-| `svd/layer{0,5,11}/sigma_mean` | Mean singular value | Stable | Drift |
-| `svd/layer{0,5,11}/spectrum_decay` | σ_1 / σ_10 (how fast spectrum decays) | 2-10 | > 100 (low rank) |
+| `svd/layer{0,5,11}_qkv/sigma_max` | Largest singular value of weights | Stable over time | Sudden spikes |
+| `svd/layer{0,5,11}_qkv/sigma_min` | Smallest singular value of weights | > 1e-6 | < 1e-8 (rank deficient) |
+| `svd/layer{0,5,11}_qkv/condition_number` | σ_max / σ_min of weights | < 1000 | > 10000 (ill-conditioned) |
+| `svd/layer{0,5,11}_qkv/effective_rank` | Effective rank of weights | 50-90% of full rank | Dropping over time |
+| `svd/layer{0,5,11}_qkv/spectral_gap` | σ_1 / σ_2 (spectrum decay) | 2-10 | > 100 (low rank) |
 
 **Weight Health Indicators:**
-- **Condition number**: Measures numerical stability of matrix
+- **Condition number**: Measures numerical stability of weight matrix
   - High values (> 10000) = matrix nearly singular, optimization difficulty
-  - PolarExpress should help keep this lower by maintaining orthogonality
-- **Effective rank**: How many "directions" the matrix uses
+  - Shows long-term accumulation of conditioning issues
+- **Effective rank**: How many "directions" the weight matrix uses
   - Dropping rank = loss of expressivity
   - Could indicate weight collapse or over-regularization
-- **Spectrum decay**: How quickly singular values drop off
-  - Faster decay = more low-rank structure (could be good or bad depending on context)
 
-**Total:** 21 SVD metrics (7 metrics × 3 layers)
+### Update/Momentum Buffer SVD - Per Layer (Muon only)
+| Metric | Description | Good Range | Alerts |
+|--------|-------------|------------|---------|
+| `svd/update_layer{0,5,11}_qkv/sigma_max` | Largest singular value of updates | Stable | Sudden spikes |
+| `svd/update_layer{0,5,11}_qkv/sigma_min` | Smallest singular value of updates | > 1e-6 | < 1e-8 (rank deficient) |
+| `svd/update_layer{0,5,11}_qkv/condition_number` | σ_max / σ_min of updates | < 100 | > 1000 (ill-conditioned) |
+| `svd/update_layer{0,5,11}_qkv/effective_rank` | Effective rank of updates | 50-90% of full rank | Dropping |
+| `svd/update_layer{0,5,11}_qkv/spectral_gap` | σ_1 / σ_2 of updates | 2-10 | > 100 (low rank) |
 
-**Note:** SVD is expensive (~50ms for 3 layers), so computed every 500 steps only
+**Update Health Indicators (CRITICAL FOR POLAREXPRESS EVALUATION):**
+- **Update condition number**: **Directly measures what PE is supposed to improve**
+  - This is the momentum buffer that PolarExpress orthogonalizes
+  - Lower values = better-conditioned optimization steps
+  - Compare across PE configurations to find optimal hyperparameters
+- **Update effective rank**: Whether optimizer is making diverse steps
+  - Low rank updates = optimizer stuck in low-dimensional subspace
+  - PE should help maintain full-rank updates
+
+**Total:** 30 SVD metrics (5 weight + 5 update × 3 layers)
+
+**Note:** SVD is expensive (~90ms for 3 layers × 2 matrix types), so computed every 500 steps only
 
 ## F) Numeric Stability Alarms (Every Step)
 
@@ -206,15 +219,15 @@ attn/maxA/frac>0.95
 | **Every step** | train/loss, train/grad_norm, train/lr, tokens_per_sec, naninf_flag | ~6 | Negligible |
 | **Every 10 steps** | amp_scaler, amp_overflows | 2 | < 0.1ms |
 | **Every 100 steps** | pe/*, logits/layer*/*, attn/layer*/*, qkv/layer*/*, grads/*, weights/* | ~45 | ~1.2ms |
-| **Every 500 steps** | svd/layer*/* | 21 | ~50ms |
+| **Every 500 steps** | svd/layer*/*, svd/update_layer*/* | 30 | ~90ms |
 | **Every val_step** | val/loss, val/ppl | 2 | Variable |
 
-**Total Metrics: ~76 metrics**
+**Total Metrics: ~91 metrics**
 
 **Computational Cost:**
 - Regular steps: ~1.2ms overhead per step (~0.12% of typical 1000ms step)
-- SVD steps: ~51.2ms overhead (~5.1% of step, but only every 500 steps)
-- Average overhead: ~0.14% across all steps
+- SVD steps: ~91.2ms overhead (~9.1% of step, but only every 500 steps)
+- Average overhead: ~0.20% across all steps
 
 **Optimizations Applied:**
 - ✅ Sequential layer forwarding (saves ~37% on attention metrics)

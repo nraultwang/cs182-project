@@ -75,6 +75,56 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                             break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute SVD for {label}: {e}")
+            
+            # Also compute SVD on momentum buffers (updates) if using Muon
+            # This directly measures what PolarExpress operates on
+            if hasattr(optimizer, 'param_groups'):
+                try:
+                    for group in optimizer.param_groups:
+                        for p in group['params']:
+                            if optimizer.state.get(p, {}).get('use_muon', False):
+                                # Get the parameter name
+                                param_name = None
+                                for name, param in model.named_parameters():
+                                    if param is p:
+                                        param_name = name
+                                        break
+                                
+                                if param_name is None:
+                                    continue
+                                
+                                # Check if this is one of our target layers
+                                for target_name, label in svd_targets:
+                                    if target_name in param_name:
+                                        state = optimizer.state[p]
+                                        if 'momentum_buffer' in state:
+                                            buf = state['momentum_buffer']
+                                            
+                                            # Reshape if needed (same as Muon does)
+                                            if buf.ndim > 2:
+                                                buf = buf.view(buf.size(0), -1)
+                                            
+                                            # Compute SVD on the momentum buffer
+                                            U_buf, S_buf, Vh_buf = torch.linalg.svd(buf, full_matrices=False)
+                                            
+                                            # Key spectral metrics for updates
+                                            sigma_max_buf = S_buf[0].item()
+                                            sigma_min_buf = S_buf[-1].item()
+                                            condition_number_buf = sigma_max_buf / (sigma_min_buf + 1e-10)
+                                            effective_rank_buf = (S_buf.sum() / (sigma_max_buf + 1e-10)).item()
+                                            
+                                            # Store with "update" prefix to distinguish from weight SVD
+                                            metrics[f'svd/update_{label}/sigma_max'] = sigma_max_buf
+                                            metrics[f'svd/update_{label}/sigma_min'] = sigma_min_buf
+                                            metrics[f'svd/update_{label}/condition_number'] = condition_number_buf
+                                            metrics[f'svd/update_{label}/effective_rank'] = effective_rank_buf
+                                            
+                                            if len(S_buf) > 1:
+                                                metrics[f'svd/update_{label}/spectral_gap'] = (S_buf[0] / S_buf[1]).item()
+                                        
+                                        break  # Found the target, move to next
+                except Exception as e:
+                    print(f"Warning: Could not compute SVD for momentum buffers: {e}")
     
     with torch.no_grad():
         # C) Attention health - sample from first, middle, and last layers
