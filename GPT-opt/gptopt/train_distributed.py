@@ -450,8 +450,9 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     # C) & D) Attention health and light scales (every 100 steps)
                     if step % 100 == 0:
                         try:
-                            # Compute SVD every 500 steps (more expensive)
-                            compute_svd = (step % 500 == 0)
+                            # Compute SVD at configurable frequency (default: every 100 steps)
+                            svd_log_step = logging_params.get('svd_log_step', 100)
+                            compute_svd = (step % svd_log_step == 0)
                             advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=compute_svd)
                             wandb_log_dict.update(advanced_metrics)
                         except Exception as e:

@@ -57,6 +57,9 @@ parameters:
   logging_params.val_step:
     value: 500
   
+  logging_params.svd_log_step:
+    value: 100
+  
   logging_params.save_ckpt_step:
     value: 2000
   

@@ -11,7 +11,7 @@ parameters:
   
   # Dataset and model
   training_data:
-    value: finewebmini
+    value: fineweb
   
   gpt_model:
     value: gpt-small
@@ -50,9 +50,9 @@ parameters:
   optimizer_params.args.ns_steps:
     value: 5
   
-  # Training parameters
+  # Training parameters (0.3 epochs = ~572 steps = ~90 min on A6000)
   training_data.training_params.num_epochs:
-    value: 7
+    value: 0.3
   
   training_data.training_params.tokens_processed:
     value: 524288
@@ -63,6 +63,9 @@ parameters:
   
   logging_params.val_step:
     value: 500
+  
+  logging_params.svd_log_step:
+    value: 100
   
   logging_params.save_ckpt_step:
     value: 2000

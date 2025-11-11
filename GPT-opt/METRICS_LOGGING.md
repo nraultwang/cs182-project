@@ -254,21 +254,27 @@ attn/maxA/frac>0.95
 | **Every step** | train/loss, train/grad_norm, train/lr, tokens_per_sec, naninf_flag | ~6 | Negligible |
 | **Every 10 steps** | amp_scaler, amp_overflows | 2 | < 0.1ms |
 | **Every 100 steps** | pe/*, logits/layer*/*, attn/layer*/*, qkv/layer*/*, grads/*, weights/* | ~45 | ~1.2ms |
-| **Every 500 steps** | svd/layer*_{q,k,v}/*, svd/update_*/*, ortho/layer*_{q,k,v}/* | 123 | ~140ms |
+| **Every svd_log_step (default: 100)** | svd/layer*_{q,k,v}/*, svd/update_*/*, ortho/layer*_{q,k,v}/* | 123 | ~140ms |
 | **Every val_step** | val/loss, val/ppl | 2 | Variable |
 
 **Total Metrics: ~178 metrics**
 
-**Computational Cost:**
-- Regular steps: ~1.2ms overhead per step (~0.12% of typical 1000ms step)
-- SVD + orthogonality steps: ~141.2ms overhead (~14% of step, but only every 500 steps)
-- Average overhead: ~0.30% across all steps
+**Note:** `svd_log_step` is configurable in `logging_params.svd_log_step` (default: 100 steps).
 
-**SVD Breakdown (per 500-step interval):**
+**Computational Cost (with svd_log_step=100):**
+- Regular steps: ~1.2ms overhead per step (~0.12% of typical 1000ms step)
+- SVD + orthogonality steps: ~141.2ms overhead (~14% of step, every 100 steps)
+- Average overhead: ~1.5% across all steps (at 100-step frequency)
+
+**SVD Breakdown (per svd_log_step interval):**
 - Weight SVD: 9 matrices (3 layers × 3 projections) × ~4ms = ~36ms
 - Update SVD: 12 matrices (3 layers × 4: Q/K/V/stacked) × ~4ms = ~48ms
 - Orthogonality: 9 checks (3 layers × 3 projections) × ~1ms = ~9ms
 - Total overhead: ~93ms (conservative estimate ~140ms with safety margin)
+
+**Frequency Trade-offs:**
+- `svd_log_step=100`: ~1.5% overhead, ~5 samples in Phase 0/1 (good temporal resolution)
+- `svd_log_step=500`: ~0.3% overhead, ~1 sample in Phase 0/1 (minimal overhead)
 
 **Optimizations Applied:**
 - ✅ Sequential layer forwarding (saves ~37% on attention metrics)
