@@ -1,0 +1,72 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase0-muon"
+  
+  # Dataset and model
+  training_data:
+    value: finewebmini
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Muon optimizer
+  optimizer_params.name:
+    value: muon
+  
+  # Muon learning rates (typically ~10x higher than AdamW)
+  optimizer_params.args.lr:
+    values: [0.01, 0.02, 0.04]
+  
+  optimizer_params.args.weight_decay:
+    value: 0.1
+  
+  # Muon-specific: PolarExpress settings (paper defaults)
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  optimizer_params.args.polar_num_iters:
+    value: 5
+  
+  optimizer_params.args.polar_safety:
+    value: 1.01
+  
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+  
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Shorter training for baseline validation
+  training_data.training_params.num_epochs:
+    value: 3
+  
+  training_data.training_params.tokens_processed:
+    value: 524288
+  
+  # Logging
+  logging_params.log_step:
+    value: 50
+  
+  logging_params.val_step:
+    value: 500
+  
+  logging_params.svd_log_step:
+    value: 100
+  
+  logging_params.save_ckpt_step:
+    value: 2000
+  
+  logging_params.wandb.project:
+    value: "cs182-polar-express"
+  
+  logging_params.wandb.tags:
+    value: ["phase0", "baseline", "muon"]
+
+# This creates: 3 Muon runs with appropriate LRs

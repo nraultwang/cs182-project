@@ -7,7 +7,7 @@ metric:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "phase0-baseline"
+    value: "phase0-adamw"
   
   # Dataset and model
   training_data:
@@ -16,32 +16,16 @@ parameters:
   gpt_model:
     value: gpt-small
   
-  # Test multiple optimizers for baseline
+  # AdamW optimizer
   optimizer_params.name:
-    values: [adamw, muon]
+    value: adamw
   
-  # Learning rates to test
+  # AdamW learning rates (typical range for GPT-2: 1e-4 to 6e-4)
   optimizer_params.args.lr:
-    values: [0.001, 0.003, 0.005]
+    values: [0.0001, 0.0003, 0.0006]
   
   optimizer_params.args.weight_decay:
     value: 0.1
-  
-  # For muon runs, set PE to paper default
-  optimizer_params.args.polar_method:
-    value: polarexpress
-  
-  optimizer_params.args.polar_num_iters:
-    value: 5
-  
-  optimizer_params.args.polar_safety:
-    value: 1.01
-  
-  optimizer_params.args.polar_cushion:
-    value: 0.024
-  
-  optimizer_params.args.ns_steps:
-    value: 5
   
   # Shorter training for baseline validation
   training_data.training_params.num_epochs:
@@ -67,6 +51,6 @@ parameters:
     value: "cs182-polar-express"
   
   logging_params.wandb.tags:
-    value: ["phase0", "baseline", "validation"]
+    value: ["phase0", "baseline", "adamw"]
 
-# This creates: 2 optimizers × 3 LRs = 6 quick validation runs
+# This creates: 3 AdamW runs with appropriate LRs
