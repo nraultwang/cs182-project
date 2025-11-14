@@ -173,6 +173,7 @@ class Muon(torch.optim.Optimizer):
         self.polar_num_iters = polar_num_iters
         self.polar_safety = polar_safety
         self.polar_cushion = polar_cushion
+        self.iter_counter = 0
         
         # Instantiate the polar factorization method
         self.polar_factorizer = self._initialize_polar_factorizer(polar_method)
@@ -192,7 +193,7 @@ class Muon(torch.optim.Optimizer):
                 cushion=self.polar_cushion
             )
             # Return a partial function with the coefficients bound
-            return partial(PolarExpress, coeffs_list=coeffs)
+            return partial(PolarExpress, coeffs_lists=coeffs)
         elif polar_method == "fast_polarexpress":
             return partial(FastApplyPolarExpress, restart_interval=3, shift_eps=1e-3)
         else:
@@ -281,7 +282,8 @@ class Muon(torch.optim.Optimizer):
                 if compute_ortho and use_polarexpress:
                     try:
                         # Request XTX to compute ortho error efficiently
-                        result = self.polar_factorizer(g, group["ns_steps"], return_ortho_info=True)
+                        result = self.polar_factorizer(g, group["ns_steps"], return_ortho_info=True, iter_counter = self.iter_counter)
+                        self.iter_counter+= 1
                         if isinstance(result, tuple):
                             u, XTX = result
                             # Compute ||XTX - I||_F using cached XTX

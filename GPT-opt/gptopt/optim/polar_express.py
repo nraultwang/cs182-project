@@ -45,7 +45,7 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     Get coefficient list for specified configuration.
     
     Args:
-        num_iters: Number of iterations (3, 5, or 7). If None, use default.
+        num_iters: List of number of iterations (3, 5, or 7). If None, use default.
         safety: Safety factor (1.0 or 1.01)
         cushion: Cushion parameter. Library provides:
                  - 0.1 (or close)
@@ -53,7 +53,7 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
                  - 0.024 or 0.02407327424182761 (paper's precise value)
     
     Returns:
-        List of (a, b, c) coefficient tuples
+        list of list of (a, b, c) coefficient tuples for each num_iters
     
     Note:
         The library uses precise cushion value 0.02407327424182761 but keys it as "0.024".
@@ -61,7 +61,7 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     """
     if num_iters is None:
         # Use default 8-iteration config
-        return DEFAULT_COEFFS_LIST
+        return [DEFAULT_COEFFS_LIST]
     
     if COEFFS_LIBRARY is None:
         warnings.warn("Coefficient library not available, using default coefficients")
@@ -83,23 +83,24 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     # Format safety with 2 decimals to match library format
     s_str = f"{safety:.2f}"
     
-    key = f"n{num_iters}_s{s_str}_c{c_str}"
+    keys = [f"n{num_iter}_s{s_str}_c{c_str}" for num_iter in num_iters]
     
-    if key not in COEFFS_LIBRARY:
-        # Try alternative formatting in case of rounding
-        available_keys = [k for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iters}_s{s_str}_")]
-        warnings.warn(
-            f"Coefficient config '{key}' not found in library. "
-            f"Available configs for n={num_iters}, s={s_str}: {available_keys}. "
-            f"Using default coefficients."
-        )
-        return DEFAULT_COEFFS_LIST
+    for key in keys:
+        if key not in COEFFS_LIBRARY:
+            # Try alternative formatting in case of rounding
+            available_keys = [k for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iter}_s{s_str}_") for num_iter in num_iters]
+            warnings.warn(
+                f"Coefficient config '{key}' not found in library. "
+                f"Available configs for n={num_iters}, s={s_str}: {available_keys}. "
+                f"Using default coefficients."
+            )
+            return [DEFAULT_COEFFS_LIST]
     
-    return COEFFS_LIBRARY[key]
+    return [COEFFS_LIBRARY[key] for key in keys]
 
 
 @torch.compile
-def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None, return_ortho_info=False) -> torch.Tensor:
+def PolarExpress(G: torch.Tensor, steps: int, coeffs_lists=None, return_ortho_info=False, iter_counter: int) -> torch.Tensor:
     """
     Polar decomposition using polynomial iteration.
     
@@ -110,16 +111,18 @@ def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None, return_ortho_inf
                     If None, uses DEFAULT_COEFFS_LIST (8 iterations, safety=1.01)
         return_ortho_info: If True, return (X, XTX) for computing orthogonality error
     """
-    if coeffs_list is None:
-        coeffs_list = DEFAULT_COEFFS_LIST
+    if coeffs_lists is None:
+        coeffs_list = [DEFAULT_COEFFS_LIST]
         
     assert G.ndim >= 2
     X = G.bfloat16()  # for speed
     transposed = G.size(-2) > G.size(-1)
     if transposed: X = X.mT  # this reduces FLOPs
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.01 +1e-7)
-    hs = coeffs_list[:steps] + list( 
-        repeat(coeffs_list[-1], steps - len(coeffs_list)))
+    # hs = coeffs_list[:steps] + list( 
+    #     repeat(coeffs_list[-1], steps - len(coeffs_list)))
+    hs = coeffs_lists[iter_counter % len(coeffs_lists)]
+    
     A = None  # Keep track of last A = X @ X.mT
     for a, b, c in hs:
         A = X @ X.mT
