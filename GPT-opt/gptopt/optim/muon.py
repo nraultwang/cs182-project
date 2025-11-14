@@ -179,23 +179,24 @@ class Muon(torch.optim.Optimizer):
         self.polar_factorizer = self._initialize_polar_factorizer(polar_method)
 
     def _initialize_polar_factorizer(self, polar_method):
-        """Initialize the polar factorization method based on the provided name and parameters."""
+        """Initialize the polar factorization method(s) based on the provided name and parameters."""
         if polar_method == "Keller":
-            return zeropower_via_newtonschulz5  # Use the method directly
+            return [zeropower_via_newtonschulz5]  # Wrap in list for consistency
         elif polar_method == "Jiacheng":
-            return jiacheng
+            return [jiacheng]  # Wrap in list for consistency
         elif polar_method == "polarexpress":
             # Get coefficients for the specified configuration
             from gptopt.optim.polar_express import get_coeffs_for_config
-            coeffs = get_coeffs_for_config(
+            coeffs_lists = get_coeffs_for_config(
                 num_iters=self.polar_num_iters,
                 safety=self.polar_safety,
                 cushion=self.polar_cushion
             )
-            # Return a partial function with the coefficients bound
-            return partial(PolarExpress, coeffs_lists=coeffs)
+            # Create one partial function per coefficient list (for cycling)
+            # This allows torch.compile to optimize each separately
+            return [partial(PolarExpress, coeffs_list=coeffs) for coeffs in coeffs_lists]
         elif polar_method == "fast_polarexpress":
-            return partial(FastApplyPolarExpress, restart_interval=3, shift_eps=1e-3)
+            return [partial(FastApplyPolarExpress, restart_interval=3, shift_eps=1e-3)]
         else:
             raise ValueError(f"Unknown polar method: {polar_method}")
 
@@ -274,16 +275,17 @@ class Muon(torch.optim.Optimizer):
                 self._pe_step_count += 1
                 compute_ortho = (self._pe_step_count % 100 == 0)
                 
-                # Call PolarExpress with optional orthogonality info
+                # Select the appropriate polar factorizer (cycles through list)
+                current_factorizer = self.polar_factorizer[self.iter_counter % len(self.polar_factorizer)]
+                
                 # Check if using PolarExpress by seeing if it's a partial of PolarExpress
-                use_polarexpress = (hasattr(self.polar_factorizer, 'func') and 
-                                   self.polar_factorizer.func.__name__ == 'PolarExpress')
+                use_polarexpress = (hasattr(current_factorizer, 'func') and 
+                                   current_factorizer.func.__name__ == 'PolarExpress')
                 
                 if compute_ortho and use_polarexpress:
                     try:
                         # Request XTX to compute ortho error efficiently
-                        result = self.polar_factorizer(g, group["ns_steps"], return_ortho_info=True, iter_counter = self.iter_counter)
-                        self.iter_counter+= 1
+                        result = current_factorizer(g, group["ns_steps"], return_ortho_info=True)
                         if isinstance(result, tuple):
                             u, XTX = result
                             # Compute ||XTX - I||_F using cached XTX
@@ -301,9 +303,12 @@ class Muon(torch.optim.Optimizer):
                             u = result
                     except Exception as e:
                         # Fallback if return_ortho_info not supported
-                        u = self.polar_factorizer(g, group["ns_steps"])
+                        u = current_factorizer(g, group["ns_steps"])
                 else:
-                    u = self.polar_factorizer(g, group["ns_steps"])
+                    u = current_factorizer(g, group["ns_steps"])
+                
+                # Increment counter after call
+                self.iter_counter += 1
                 
                 pe_time = (time_module.time() - pe_start) * 1000  # ms
                 if hasattr(self, '_pe_times'):

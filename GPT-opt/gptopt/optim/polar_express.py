@@ -100,28 +100,32 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
 
 
 @torch.compile
-def PolarExpress(G: torch.Tensor, steps: int, coeffs_lists=None, return_ortho_info=False, iter_counter: int) -> torch.Tensor:
+def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None, return_ortho_info=False, iter_counter: int = 0) -> torch.Tensor:
     """
     Polar decomposition using polynomial iteration.
     
     Args:
         G: Input gradient matrix
-        steps: Number of iteration steps
-        coeffs_list: Optional list of (a, b, c) coefficient tuples.
-                    If None, uses DEFAULT_COEFFS_LIST (8 iterations, safety=1.01)
+        steps: Number of Newton-Schulz steps (passed for compatibility but not used by PolarExpress)
+        coeffs_list: List of (a, b, c) coefficient tuples for one configuration.
+                    If None, uses DEFAULT_COEFFS_LIST (8 iterations, safety=1.01).
         return_ortho_info: If True, return (X, XTX) for computing orthogonality error
+        iter_counter: Unused, kept for backward compatibility
+    
+    Returns:
+        X: Orthogonalized matrix (polar factor)
+        (X, XTX): If return_ortho_info=True, also returns cached XTX for orthogonality check
     """
-    if coeffs_lists is None:
-        coeffs_list = [DEFAULT_COEFFS_LIST]
+    if coeffs_list is None:
+        coeffs_list = DEFAULT_COEFFS_LIST
         
     assert G.ndim >= 2
     X = G.bfloat16()  # for speed
     transposed = G.size(-2) > G.size(-1)
     if transposed: X = X.mT  # this reduces FLOPs
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.01 +1e-7)
-    # hs = coeffs_list[:steps] + list( 
-    #     repeat(coeffs_list[-1], steps - len(coeffs_list)))
-    hs = coeffs_lists[iter_counter % len(coeffs_lists)]
+    
+    hs = coeffs_list
     
     A = None  # Keep track of last A = X @ X.mT
     for a, b, c in hs:
