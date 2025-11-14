@@ -233,15 +233,27 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                 valid_logits = att_logits[causal_mask.expand_as(att_logits) == 1]
                 metrics[f'logits/{label}/mean'] = valid_logits.mean().item()
                 metrics[f'logits/{label}/std'] = valid_logits.std().item()
-                metrics[f'logits/{label}/max_p95'] = torch.quantile(valid_logits, 0.95).item()
+                # Subsample if tensor is too large for quantile computation
+                if valid_logits.numel() > 1_000_000:
+                    indices = torch.randperm(valid_logits.numel(), device=valid_logits.device)[:1_000_000]
+                    sampled_logits = valid_logits[indices]
+                else:
+                    sampled_logits = valid_logits
+                metrics[f'logits/{label}/max_p95'] = torch.quantile(sampled_logits, 0.95).item()
                 
                 # Attention entropy (post-softmax)
                 valid_probs = att_probs[torch.isfinite(att_probs).all(dim=-1)]
                 if len(valid_probs) > 0:
                     entropy = -(valid_probs * torch.log(valid_probs + 1e-10)).sum(dim=-1)
                     metrics[f'attn/{label}/entropy/mean'] = entropy.mean().item()
-                    metrics[f'attn/{label}/entropy/p05'] = torch.quantile(entropy, 0.05).item()
-                    metrics[f'attn/{label}/entropy/p95'] = torch.quantile(entropy, 0.95).item()
+                    # Subsample if tensor is too large for quantile computation
+                    if entropy.numel() > 1_000_000:
+                        indices = torch.randperm(entropy.numel(), device=entropy.device)[:1_000_000]
+                        sampled_entropy = entropy[indices]
+                    else:
+                        sampled_entropy = entropy
+                    metrics[f'attn/{label}/entropy/p05'] = torch.quantile(sampled_entropy, 0.05).item()
+                    metrics[f'attn/{label}/entropy/p95'] = torch.quantile(sampled_entropy, 0.95).item()
                 
                 # Max attention fraction (attention collapse detector)
                 max_attn = att_probs.max(dim=-1)[0]
