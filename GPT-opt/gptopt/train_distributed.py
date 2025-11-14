@@ -450,8 +450,9 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                 # Compute tokens per second
                 tps = training_params["tokens_processed"] / step_time
                 
-                if master_process and wandb_run is not None:
-                    # A) End-to-end metrics (every step)
+                # Only log to wandb at log_step frequency to reduce overhead
+                if master_process and wandb_run is not None and (step % logging_params['log_step'] == 0):
+                    # A) End-to-end metrics (at log_step frequency)
                     wandb_log_dict = {
                         "train/loss": loss_accum.item(), 
                         "train/grad_norm": norm.item(),
