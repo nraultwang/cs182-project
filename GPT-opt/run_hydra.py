@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 import uuid
 
 
-@hydra.main(version_base=None, config_path="hydra_conf")
+@hydra.main(version_base=None, config_path="hydra_conf", config_name="config")
 def main(config : DictConfig):
     config = OmegaConf.to_container(config, resolve=True)
     set_seed(42)
