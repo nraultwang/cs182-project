@@ -34,9 +34,9 @@ parameters:
   optimizer_params.args.weight_decay:
     value: 0.1
   
-  # Shorter training for baseline validation
+  # Shorter training for baseline validation (0.2 epochs for fast LR search)
   training_data.training_params.num_epochs:
-    value: 1
+    value: 0.2
   
   training_data.training_params.tokens_processed:
     value: 524288

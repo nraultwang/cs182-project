@@ -33,9 +33,9 @@ parameters:
   optimizer_params.args.weight_decay:
     value: 0.1
   
-  # Short run for testing (1 epoch)
+  # Short run for testing (0.2 epochs for timing)
   training_data.training_params.num_epochs:
-    value: 1
+    value: 0.2
   
   training_data.training_params.tokens_processed:
     value: 524288

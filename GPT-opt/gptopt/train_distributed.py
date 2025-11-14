@@ -354,7 +354,7 @@ def eval_validation_loss(model, val_dataloader, val_accum_steps, autocast_ctxt):
                 val_loss += model(batch[0], batch[1], return_logits=False)[1]
             counter += 1
             if (val_accum_steps != 0) & (counter >= val_accum_steps): break
-    val_loss = torch.tensor(val_loss.detach().clone(), device=device)/counter
+    val_loss = val_loss.detach().clone() / counter
     if world_size > 1: dist.all_reduce(val_loss, op=dist.ReduceOp.AVG)
     if rank == 0:
         print(f"Validation Loss: {val_loss.item()}")
@@ -383,6 +383,12 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
     if master_process: print(f"Accumulate gradient for {grad_accum_steps} steps")
     total_iterations = int(training_params['num_epochs'] * len(train_dataloader) / training_params['tokens_processed'])
     max_grad_norm = training_params['gradnorm'] if training_params['gradnorm'] != 0. else float('inf')
+    
+    # Support fractional epochs by calculating max micro-steps
+    num_epochs = training_params['num_epochs']
+    steps_per_epoch = len(train_dataloader)
+    max_microsteps = int(num_epochs * steps_per_epoch)
+    if master_process: print(f"Training for {num_epochs} epochs = {max_microsteps} micro-steps = {max_microsteps // grad_accum_steps} optimizer steps")
 
     load_ckpt_step = logging_params['load_ckpt_step']
     if load_ckpt_step != 0:
@@ -391,10 +397,13 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
     if ckpt_dir == "":
         print("Will not save checkpoints as no directory is specified")
     
-    # Training loop
-    for epoch in range(training_params['num_epochs']):
+    # Training loop (supports fractional epochs)
+    global_microstep = 0
+    for epoch in range(int(num_epochs) + 1):  # +1 to handle fractional part
+        if global_microstep >= max_microsteps:
+            break
         if master_process:
-            print(f"Epoch {epoch+1} of {training_params['num_epochs']}")
+            print(f"Epoch {epoch+1} (up to {num_epochs:.2f} total)")
 
         model.train()
         start_epoch = time.time()
@@ -518,8 +527,16 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         with open(ckpt_dir + '/log.json', 'w') as file:
                             json.dump(logger.__dict__, file)
                 loss_accum = 0.
-                start_time = time.time() 
+                start_time = time.time()
+            
             step += 1
+            global_microstep += 1
+            
+            # Break if we've reached fractional epoch limit
+            if global_microstep >= max_microsteps:
+                if master_process:
+                    print(f"Reached {num_epochs} epochs ({global_microstep} micro-steps), stopping training")
+                break
             
             
         print(f"In rank: {rank}, epoch {epoch+1}, Train Loss: {logger.losses[-1]}")
