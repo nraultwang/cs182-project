@@ -47,7 +47,7 @@ parameters:
   optimizer_params.args.polar_cushion:
     value: 0.024
   
-  optimizer_params.args.ns_steps:
+  +optimizer_params.args.ns_steps:
     value: 5
   
   # Shorter training for baseline validation (0.2 epochs for fast LR search)

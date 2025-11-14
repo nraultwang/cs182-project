@@ -54,7 +54,7 @@ parameters:
     value: 0.024  # Fix this for most runs
   
   # Newton-Schulz steps
-  optimizer_params.args.ns_steps:
+  +optimizer_params.args.ns_steps:
     value: 5
   
   # Training parameters (0.3 epochs = ~572 steps = ~90 min on A6000)
