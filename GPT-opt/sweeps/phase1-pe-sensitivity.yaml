@@ -21,7 +21,7 @@ parameters:
     value: fineweb1B
   
   gpt_model:
-    value: gpt-small
+    value: gpt-tiny
   
   # Optimizer base
   optimizer_params.name:
