@@ -90,13 +90,15 @@ def main(config : DictConfig):
     # Initialize wandb
     if master_process and config['logging_params'].get('wandb', None) is not None:
         config_for_wandb_logging = dict(**config, world_size=world_size)
-        wandb_config = config['logging_params']['wandb']
+        wandb_config = config['logging_params']['wandb'].copy()  # Make a copy to avoid modifying original
         if "dir" not in wandb_config:
             wandb_config['dir'] = "./outputs/wandb"
+        # Merge tags before passing to wandb.init to avoid duplicate keyword argument
+        merged_tags = wandb_config.pop('tags', []) + [str(HydraConfig.get().job.name)]
         wandb_run = wandb.init(
             **wandb_config,
             id=random_job_id,
-            tags=wandb_config.get('tags', []) + [str(HydraConfig.get().job.name)],
+            tags=merged_tags,
             config=config_for_wandb_logging,
             reinit='create_new',
         )
