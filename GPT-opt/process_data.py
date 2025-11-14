@@ -26,7 +26,7 @@ args = parser.parse_args()
 name = args.name
 hf_path, remote_name = datadict[name]
 enc = tiktoken.get_encoding(args.tokenizer)
-dataset_path = DATA_DIR + f'/{name}-{args.tokenizer}/'
+dataset_path = os.path.join(DATA_DIR, f'{name}-{args.tokenizer}')
 os.makedirs(dataset_path, exist_ok=True)
 print("Data will be saved in the path : ", dataset_path)
 
