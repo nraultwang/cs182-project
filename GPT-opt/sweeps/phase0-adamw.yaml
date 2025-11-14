@@ -4,6 +4,13 @@ metric:
   name: val/loss
   goal: minimize
 
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
 parameters:
   # Base configuration
   hydra.job.name:
