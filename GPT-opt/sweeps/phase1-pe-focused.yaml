@@ -18,7 +18,7 @@ parameters:
   
   # Dataset and model
   training_data:
-    value: fineweb
+    value: fineweb1B
   
   gpt_model:
     value: gpt-small
