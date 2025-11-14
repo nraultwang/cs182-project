@@ -1,0 +1,59 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "test-multi-gpu"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-tiny
+  
+  # Test optimizer with just 2 LRs
+  optimizer_params.name:
+    value: adamw
+  
+  optimizer_params.args.lr:
+    values: [0.0001, 0.0006]  # Just 2 values to test
+  
+  optimizer_params.args.weight_decay:
+    value: 0.1
+  
+  # Short run for testing (0.1 epochs instead of 3)
+  training_data.training_params.num_epochs:
+    value: 0.1
+  
+  training_data.training_params.tokens_processed:
+    value: 524288
+  
+  # Logging
+  logging_params.log_step:
+    value: 50
+  
+  logging_params.val_step:
+    value: 200
+  
+  logging_params.svd_log_step:
+    value: 100
+  
+  logging_params.wandb.project:
+    value: "cs182-polar-express"
+  
+  logging_params.wandb.tags:
+    value: ["test", "multi-gpu"]
+
+# This creates: 2 quick test runs (~2-3 min each)
