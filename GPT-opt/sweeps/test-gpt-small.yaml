@@ -7,7 +7,7 @@ metric:
 # Tell wandb to use Hydra override syntax (no -- prefix)
 command:
   - ${env}
-  - ${python}
+  - python
   - ${program}
   - ${args_no_hyphens}
 
