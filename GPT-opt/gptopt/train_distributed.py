@@ -383,10 +383,8 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
     if master_process: print(f"Accumulate gradient for {grad_accum_steps} steps")
     
     # Calculate total dataset size in tokens
-    # In distributed training, data is sharded so len(train_dataloader) is per-GPU
-    # Total dataset = batches_per_gpu * world_size * batch_size * context_length
-    # But for single GPU, world_size=1 so it's just batches * B * T
-    dataset_size_tokens = len(train_dataloader) * B * T
+    # len(train_dataloader) returns the total number of tokens in the dataset
+    dataset_size_tokens = len(train_dataloader)
     if master_process: print(f"Dataset size: {dataset_size_tokens / 1e9:.2f}B tokens")
     
     # Calculate optimizer steps for the requested number of epochs
