@@ -76,14 +76,15 @@ defaults:
 
 ### Error: "Could not override 'training_data.training_params.num_epochs'"
 
-**Problem**: After selecting a config group (e.g., `training_data=finewebmini`), its contents merge at the TOP level.
+**Problem**: Config groups use `# @package` directives to nest their contents under specific keys.
 
-**Fix**: Use `training_params.num_epochs` instead of `training_data.training_params.num_epochs`
+**Solution**: Our config groups use `# @package gpt_model` and `# @package training_data` directives, which means their contents are NESTED, not merged at the top level.
 
 **Correct override syntax:**
-- ✅ `training_data=finewebmini` (selects config group)
-- ✅ `training_params.num_epochs=3` (overrides merged value)
-- ❌ `training_data.training_params.num_epochs=3` (WRONG)
+- ✅ `training_data=finewebmini` (selects config group, nests under `training_data` key)
+- ✅ `training_data.training_params.num_epochs=3` (overrides nested value)
+- ✅ `gpt_model=gpt-large` (selects config group, nests under `gpt_model` key)
+- ❌ `training_params.num_epochs=3` (WRONG - not at top level due to @package directive)
 
 ### Error: "Could not find config file"
 

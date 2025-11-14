@@ -53,10 +53,10 @@ parameters:
     value: 5
   
   # Training parameters (0.3 epochs = ~572 steps = ~90 min on A6000)
-  training_params.num_epochs:
+  training_data.training_params.num_epochs:
     value: 0.3
   
-  training_params.tokens_processed:
+  training_data.training_params.tokens_processed:
     value: 524288  # ~500K tokens per step (adjust based on your batch size)
   
   # Logging

@@ -1,3 +1,4 @@
+# @package gpt_model
 n_embd: 768    
 n_layer: 12   
 n_head: 12    

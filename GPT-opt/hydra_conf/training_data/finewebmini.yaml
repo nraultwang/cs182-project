@@ -1,3 +1,4 @@
+# @package training_data
 training_params:
   tokens_processed: 262144 # 2^18  # 524288 # 2^19
   val_tokens_processed: 8388608 #2^23
