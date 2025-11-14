@@ -52,7 +52,7 @@ parameters:
   
   # Shorter training for baseline validation
   training_data.training_params.num_epochs:
-    value: 3
+    value: 1
   
   training_data.training_params.tokens_processed:
     value: 524288
