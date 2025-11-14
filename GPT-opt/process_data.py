@@ -10,6 +10,7 @@ datadict = {
     "fineweb10B" : ["HuggingFaceFW/fineweb", "sample-10BT"],
     "fineweb_edu10B" : ["HuggingFaceFW/fineweb-edu", "sample-10BT"],
     "finewebmini" : ["HuggingFaceFW/fineweb", "sample-10BT"],  # Use same as fineweb10B, can subset later
+    "fineweb1B" : ["PatrickHaller/fineweb-1B", ""],  # 1B tokens dataset
     "tiny_shakespeare" : ["tiny_shakespeare", ""],
     "wikitext" : ["wikitext", "wikitext-103-v1"]    
 }
