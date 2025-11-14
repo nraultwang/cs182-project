@@ -4,10 +4,6 @@ metric:
   name: val/loss
   goal: minimize
 
-# Set environment variables
-env:
-  DATA_DIR: ~/data/huggingface/
-
 # Tell wandb to use Hydra override syntax (no -- prefix)
 command:
   - ${env}

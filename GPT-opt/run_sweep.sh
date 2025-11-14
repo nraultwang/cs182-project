@@ -22,6 +22,10 @@ SWEEP_ID=$1
 
 echo "Starting agents for sweep: $SWEEP_ID"
 
+# Set DATA_DIR environment variable
+export DATA_DIR=~/data/huggingface/
+echo "Using DATA_DIR: $DATA_DIR"
+
 # Create log directory if it doesn't exist
 mkdir -p logs
 
