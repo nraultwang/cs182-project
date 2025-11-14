@@ -284,23 +284,27 @@ class Muon(torch.optim.Optimizer):
                 
                 if compute_ortho and use_polarexpress:
                     try:
-                        # Request XTX to compute ortho error efficiently
+                        # Request XTX to compute ortho error efficiently (before and after)
                         result = current_factorizer(g, group["ns_steps"], return_ortho_info=True)
-                        if isinstance(result, tuple):
-                            u, XTX = result
-                            # Compute ||XTX - I||_F using cached XTX
+                        if isinstance(result, tuple) and len(result) == 3:
+                            u, XTX_before, XTX_after = result
+                            # Compute ||XTX - I||_F using cached XTX values
                             with torch.no_grad():
                                 u_sample = u if u.ndim == 2 else u[0]
-                                XTX_sample = XTX if XTX.ndim == 2 else XTX[0]
-                                I = torch.eye(XTX_sample.size(0), device=XTX_sample.device, dtype=XTX_sample.dtype)
-                                ortho_err = torch.norm(XTX_sample - I, p='fro').item()
+                                XTX_before_sample = XTX_before if XTX_before.ndim == 2 else XTX_before[0]
+                                XTX_after_sample = XTX_after if XTX_after.ndim == 2 else XTX_after[0]
+                                I = torch.eye(XTX_after_sample.size(0), device=XTX_after_sample.device, dtype=XTX_after_sample.dtype)
+                                ortho_err_before = torch.norm(XTX_before_sample - I, p='fro').item()
+                                ortho_err_after = torch.norm(XTX_after_sample - I, p='fro').item()
                                 
-                                if not hasattr(self, '_pe_ortho_errs'):
-                                    self._pe_ortho_errs = []
+                                if not hasattr(self, '_pe_ortho_errs_before'):
+                                    self._pe_ortho_errs_before = []
+                                    self._pe_ortho_errs_after = []
                                     self._pe_times = []
-                                self._pe_ortho_errs.append(ortho_err)
+                                self._pe_ortho_errs_before.append(ortho_err_before)
+                                self._pe_ortho_errs_after.append(ortho_err_after)
                         else:
-                            u = result
+                            u = result if not isinstance(result, tuple) else result[0]
                     except Exception as e:
                         # Fallback if return_ortho_info not supported
                         u = current_factorizer(g, group["ns_steps"])

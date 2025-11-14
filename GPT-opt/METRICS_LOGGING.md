@@ -47,16 +47,24 @@ This document describes all metrics logged during training, organized by categor
 
 | Metric | Description | Good Range | Alerts |
 |--------|-------------|------------|---------|
-| `pe/ortho_err` | ‖U^T U - I‖_F on 2-3 sentinel matrices | < 0.1 | > 0.5 (not orthogonalizing) |
+| `pe/ortho_err_before` | ‖G^T G - I‖_F on input gradient (before PE) | 1-100 | N/A (input varies) |
+| `pe/ortho_err_after` | ‖U^T U - I‖_F on output (after PE) | < 0.1 | > 0.5 (not orthogonalizing) |
 | `pe/time_ms` | Direct cost of PE substep | < 10ms | > 50ms (bottleneck) |
 
 **PE Quality Check:**
-- `pe/ortho_err` measures how orthogonal the output U is
+- `pe/ortho_err_before` measures input gradient orthogonality (baseline, varies widely)
+  - Computed on normalized gradient before any PE iterations
+- `pe/ortho_err_after` measures how orthogonal the output U is (exact, not cached)
   - Small values (< 0.1) = good orthogonalization
   - Large values (> 0.5) = PE failing, may need different coefficients
-- `pe/time_ms` tracks computational cost per update
+  - Recomputed after final iteration for accuracy (~100ms overhead every 100 steps)
+- **Gap analysis**: `ortho_err_before - ortho_err_after` shows PE improvement
+  - Large gap = PE doing useful work
+  - Small gap = gradient already orthogonal (PE unnecessary?)
+- `pe/time_ms` tracks computational cost per update (includes both matmuls when logging)
 
-**Note:** Only logged when using `muon-polarexpress` optimizer
+**Note:** Only logged when using `muon-polarexpress` optimizer. Supports `num_iters=0` (normalization only).
+**Overhead:** ~200ms every 100 steps for both before/after matmuls (0.02% of training time).
 
 ## C) Multi-Layer Attention Health (Every 100 Steps)
 
@@ -194,15 +202,16 @@ This document describes all metrics logged during training, organized by categor
   - Identifies which projection loses orthogonality first
   - More granular than combined QKV analysis
 - **Orthogonality error**: Measures how far weights are from being orthogonal
-  - Complements `pe/ortho_err` which measures per-step orthogonalization quality
+  - Complements `pe/ortho_err_after` which measures per-step orthogonalization quality
   - Shows if PE benefits accumulate: do weights stay orthogonal over training?
   - Zero = perfectly orthogonal, higher = more deviation
 - **Normalized error**: Scaled by matrix dimension for comparison across layers
   - Makes it easier to compare shallow vs deep layers
   - Good baseline: < 0.1 means weights are reasonably orthogonal
 
-**Key Insight:** Compare `pe/ortho_err` (per-step PE quality) vs `ortho/layer*/err` (accumulated weight orthogonality)
-- Low `pe/ortho_err` + high `ortho/layer*/err` = PE works per-step but benefits don't persist
+**Key Insight:** Compare `pe/ortho_err_after` (per-step PE quality) vs `ortho/layer*/err` (accumulated weight orthogonality)
+- Low `pe/ortho_err_after` + high `ortho/layer*/err` = PE works per-step but benefits don't persist
+- Compare `pe/ortho_err_before` vs `pe/ortho_err_after` to see PE improvement per step
 - Low both = PE successfully maintains long-term orthogonality
 - High both = PE not working well (check hyperparameters)
 
@@ -236,7 +245,7 @@ train/loss  val/loss  val/ppl  tokens_per_sec
 
 ### Health Panel (Check every 100 steps)
 ```
-pe/ortho_err  attn/entropy/mean  logits/std
+pe/ortho_err_before  pe/ortho_err_after  attn/entropy/mean  logits/std
 naninf_flag   amp_overflows
 ```
 
@@ -327,7 +336,7 @@ train(..., wandb_run=None)  # No W&B logging
 plot: train/loss, val/loss, val/ppl
 
 # Panel 2: PE Health (if using PolarExpress)
-plot: pe/ortho_err, pe/time_ms
+plot: pe/ortho_err_before, pe/ortho_err_after, pe/time_ms
 
 # Panel 3: Attention Health Across Depth
 plot: attn/layer0/entropy/mean, attn/layer5/entropy/mean, attn/layer11/entropy/mean
@@ -383,7 +392,7 @@ Following LLM training best practices:
 ### Issue: Model not learning (loss plateau)
 1. Check `val/loss` vs `train/loss` - overfitting?
 2. Check `attn/layer*/entropy/mean` - attention collapsed in any layer?
-3. Check `pe/ortho_err` - PE working correctly?
+3. Check `pe/ortho_err_after` - PE working correctly? Compare to `pe/ortho_err_before` for improvement.
 4. Check `grads/layer0_norm` - gradients reaching early layers?
 5. Check `svd/layer*/effective_rank` - weight matrices losing rank?
 6. **Solution:** Adjust LR schedule, check data, verify PE coefficients, increase model capacity
@@ -409,7 +418,7 @@ Following LLM training best practices:
 ### Issue: Weights becoming ill-conditioned
 1. Check `svd/layer*/condition_number` - which layers > 10000?
 2. Check `svd/layer*/effective_rank` - rank collapsing?
-3. Check `pe/ortho_err` - PE failing to orthogonalize?
+3. Check `pe/ortho_err_after` - PE failing to orthogonalize? Is gap from `pe/ortho_err_before` small?
 4. **Solution:** Adjust PE parameters (safety, cushion), add weight decay, reduce LR
 
 ## Configuration

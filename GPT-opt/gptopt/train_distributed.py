@@ -442,9 +442,15 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         wandb_log_dict[f"train/lr_{param_group_ix}"] = param_group['lr']
                     
                     # B) PE-internal metrics (every 100 steps)
-                    if step % 100 == 0 and hasattr(optimizer, '_pe_ortho_errs'):
-                        if len(optimizer._pe_ortho_errs) > 0:
-                            wandb_log_dict["pe/ortho_err"] = np.mean(optimizer._pe_ortho_errs[-10:])  # Average last 10
+                    if step % 100 == 0:
+                        # Log orthogonality before PE (input gradient quality)
+                        if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
+                            wandb_log_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])  # Average last 10
+                        # Log orthogonality after PE (output quality)
+                        if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
+                            wandb_log_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])  # Average last 10
+                        # Log PE execution time
+                        if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
                             wandb_log_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
                     
                     # C) & D) Attention health and light scales (every 100 steps)

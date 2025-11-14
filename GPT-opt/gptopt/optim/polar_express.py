@@ -109,12 +109,15 @@ def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None, return_ortho_inf
         steps: Number of Newton-Schulz steps (passed for compatibility but not used by PolarExpress)
         coeffs_list: List of (a, b, c) coefficient tuples for one configuration.
                     If None, uses DEFAULT_COEFFS_LIST (8 iterations, safety=1.01).
-        return_ortho_info: If True, return (X, XTX) for computing orthogonality error
+                    Can be empty list for num_iters=0 (just normalization).
+        return_ortho_info: If True, return (X, XTX_before, XTX_after) for orthogonality tracking
         iter_counter: Unused, kept for backward compatibility
     
     Returns:
         X: Orthogonalized matrix (polar factor)
-        (X, XTX): If return_ortho_info=True, also returns cached XTX for orthogonality check
+        (X, XTX_before, XTX_after): If return_ortho_info=True, also returns:
+            - XTX_before: X @ X.mT of normalized input (before iterations)
+            - XTX_after: X @ X.mT after all iterations (recomputed for accuracy)
     """
     if coeffs_list is None:
         coeffs_list = DEFAULT_COEFFS_LIST
@@ -127,21 +130,39 @@ def PolarExpress(G: torch.Tensor, steps: int, coeffs_list=None, return_ortho_inf
     
     hs = coeffs_list
     
+    # Compute "before" orthogonality if needed (input gradient quality)
+    XTX_before = None
+    if return_ortho_info:
+        XTX_before = X @ X.mT
+    
     A = None  # Keep track of last A = X @ X.mT
+    
+    # Handle num_iters=0 case (no iterations, just return normalized gradient)
+    if len(hs) == 0:
+        if transposed: X = X.mT
+        if return_ortho_info:
+            # Compute XTX after potential transpose
+            if transposed:
+                XTX_after = X.mT @ X
+            else:
+                XTX_after = XTX_before  # Same as before since no iterations
+            return X, XTX_before, XTX_after
+        return X
+    
     for a, b, c in hs:
         A = X @ X.mT
         B = b * A + c * A @ A
         X = a * X + B @ X  # X <- aX + bX^3 + cX^5
     if transposed: X = X.mT
     
-    if return_ortho_info and A is not None:
-        # Return X and XTX (which is A if not transposed, or would be X.mT @ X if transposed)
+    if return_ortho_info:
+        # Compute true XTX_after for accurate orthogonality measurement
+        # We pay the extra matmul cost (every 100 steps) for scientific accuracy
         if transposed:
-            # Need to compute XTX after transpose
-            XTX = X.mT @ X
+            XTX_after = X.mT @ X
         else:
-            XTX = A  # A is already X @ X.mT from last iteration
-        return X, XTX
+            XTX_after = X @ X.mT  # Recompute after final X update
+        return X, XTX_before, XTX_after
     return X
 
 
