@@ -187,12 +187,20 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
     with torch.no_grad():
         # C) Attention health - sample from first, middle, and last layers
         try:
-            # Sample layers 0, 5, 11 for depth coverage
-            layers_to_check = [0, 5, 11]
-            layer_labels = ['layer0', 'layer5', 'layer11']
-            
             # Get model reference
             transformer = model.module.transformer if hasattr(model, 'module') else model.transformer
+            
+            # Adapt layer selection based on model depth
+            n_layers = len(transformer.h)
+            if n_layers >= 12:
+                layers_to_check = [0, 5, 11]
+                layer_labels = ['layer0', 'layer5', 'layer11']
+            elif n_layers >= 6:
+                layers_to_check = [0, n_layers // 2, n_layers - 1]
+                layer_labels = ['layer0', f'layer{n_layers // 2}', f'layer{n_layers - 1}']
+            else:
+                layers_to_check = [0, n_layers - 1]
+                layer_labels = ['layer0', f'layer{n_layers - 1}']
             
             # Compute embeddings once
             x = batch[0]

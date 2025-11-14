@@ -40,15 +40,16 @@ parameters:
   training_data.training_params.tokens_processed:
     value: 524288
   
-  # Logging
+  # Logging (adjusted for gradient accumulation: values are in micro-steps)
+  # With grad_accum=16: these translate to 50, 200, 100 optimizer steps
   logging_params.log_step:
-    value: 50
+    value: 800
   
   logging_params.val_step:
-    value: 200
+    value: 3200
   
   logging_params.svd_log_step:
-    value: 100
+    value: 1600
   
   logging_params.wandb.project:
     value: "cs182-polar-express"

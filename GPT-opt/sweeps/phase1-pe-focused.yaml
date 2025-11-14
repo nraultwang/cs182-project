@@ -64,18 +64,19 @@ parameters:
   training_data.training_params.tokens_processed:
     value: 524288
   
-  # Logging
+  # Logging (adjusted for gradient accumulation=16)
+  # Values are in micro-steps: 800=50 opt steps, 3200=200 opt steps, 1600=100 opt steps
   logging_params.log_step:
-    value: 50
+    value: 800
   
   logging_params.val_step:
-    value: 500
+    value: 3200
   
   logging_params.svd_log_step:
-    value: 100
+    value: 1600
   
   logging_params.save_ckpt_step:
-    value: 2000
+    value: 80000
   
   logging_params.wandb.project:
     value: "cs182-polar-express"
