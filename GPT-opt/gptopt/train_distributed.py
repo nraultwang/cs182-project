@@ -432,9 +432,11 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     
                     # Amplitude check (every 10 steps or if NaN detected)
                     if step % 10 == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
-                        max_grad = max([p.grad.abs().max().item() for p in model.parameters() if p.grad is not None])
-                        wandb_log_dict["train/amp_scaler"] = max_grad
-                        wandb_log_dict["train/amp_overflows"] = 1.0 if max_grad > 1e4 else 0.0
+                        grad_list = [p.grad.abs().max().item() for p in model.parameters() if p.grad is not None]
+                        if grad_list:  # Only compute if gradients exist
+                            max_grad = max(grad_list)
+                            wandb_log_dict["train/amp_scaler"] = max_grad
+                            wandb_log_dict["train/amp_overflows"] = 1.0 if max_grad > 1e4 else 0.0
                     
                     if hasattr(optimizer, 'step_size_list'):
                         wandb_log_dict["train/step_size_list"] = optimizer.step_size_list
