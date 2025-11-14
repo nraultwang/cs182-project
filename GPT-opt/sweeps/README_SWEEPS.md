@@ -62,6 +62,29 @@ command:
   - ${args_no_hyphens}
 ```
 
+### Error: "Could not override 'gpt_model'. No match in the defaults list"
+
+**Problem**: The main `config.yaml` is missing or doesn't include `gpt_model` and `training_data` in its defaults.
+
+**Fix**: Make sure `hydra_conf/config.yaml` exists with:
+```yaml
+defaults:
+  - gpt_model: gpt-small
+  - training_data: finewebmini
+  - _self_
+```
+
+### Error: "Could not override 'training_data.training_params.num_epochs'"
+
+**Problem**: After selecting a config group (e.g., `training_data=finewebmini`), its contents merge at the TOP level.
+
+**Fix**: Use `training_params.num_epochs` instead of `training_data.training_params.num_epochs`
+
+**Correct override syntax:**
+- ✅ `training_data=finewebmini` (selects config group)
+- ✅ `training_params.num_epochs=3` (overrides merged value)
+- ❌ `training_data.training_params.num_epochs=3` (WRONG)
+
 ### Error: "Could not find config file"
 
 **Problem**: Hydra can't find the config files in `hydra_conf/`.
