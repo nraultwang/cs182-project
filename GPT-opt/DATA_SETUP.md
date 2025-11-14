@@ -35,13 +35,15 @@ mkdir -p $DATA_DIR
 
 ### 3. Download and Prepare a Dataset
 
-#### For tiny_shakespeare (quick test, ~1MB)
+#### For wikitext (quick test, ~100MB)
 ```bash
 cd ~/cs182-project/GPT-opt
-python process_data.py --name tiny_shakespeare
+python process_data.py --name wikitext
 ```
 
-This will download and tokenize the dataset into `$DATA_DIR/tiny_shakespeare-gpt2/`
+This will download and tokenize the wikitext-103 dataset into `$DATA_DIR/wikitext-gpt2/`
+
+**Note:** tiny_shakespeare has been deprecated by HuggingFace. Use wikitext for testing instead.
 
 #### For finewebmini (~3GB)
 ```bash
