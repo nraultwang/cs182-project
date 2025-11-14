@@ -142,6 +142,7 @@ def get_optimizer(opt_config: dict, lr = 1e-3) -> Tuple[torch.optim.Optimizer, d
                   'rms_scaling': opt_config.get('rms_scaling', False),
                   'nuclear_scaling': opt_config.get('nuclear_scaling', False),
                   'polar_method': 'Jiacheng',
+                  'muon_mode': opt_config.get('muon_mode', 'stacked_qkv'),
                   'polar_params': opt_config.get('polar_params', {})
                   }
     elif name == 'muon-jordan':
@@ -155,6 +156,7 @@ def get_optimizer(opt_config: dict, lr = 1e-3) -> Tuple[torch.optim.Optimizer, d
                   'rms_scaling': opt_config.get('rms_scaling', False),
                   'nuclear_scaling': opt_config.get('nuclear_scaling', False),
                   'polar_method': 'Keller',
+                  'muon_mode': opt_config.get('muon_mode', 'stacked_qkv'),
                   'polar_params': opt_config.get('polar_params', {})
                   }
     elif name == 'muon-polarexpress':
@@ -170,6 +172,7 @@ def get_optimizer(opt_config: dict, lr = 1e-3) -> Tuple[torch.optim.Optimizer, d
                   'polar_num_iters': opt_config.get('polar_num_iters', None),
                   'polar_safety': opt_config.get('polar_safety', 1.01),
                   'polar_cushion': opt_config.get('polar_cushion', 0.024),
+                  'muon_mode': opt_config.get('muon_mode', 'stacked_qkv'),
                   'polar_params': opt_config.get('polar_params', {})
                   }        
 
