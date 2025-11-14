@@ -381,14 +381,24 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
     grad_accum_steps = int(training_params['tokens_processed'] / (world_size*B*T))
     val_accum_steps = int(logging_params['val_tokens_processed'] / (world_size*B*T))
     if master_process: print(f"Accumulate gradient for {grad_accum_steps} steps")
-    total_iterations = int(training_params['num_epochs'] * len(train_dataloader) / training_params['tokens_processed'])
+    
+    # Calculate total dataset size in tokens
+    # In distributed training, data is sharded so len(train_dataloader) is per-GPU
+    # Total dataset = batches_per_gpu * world_size * batch_size * context_length
+    # But for single GPU, world_size=1 so it's just batches * B * T
+    dataset_size_tokens = len(train_dataloader) * B * T
+    if master_process: print(f"Dataset size: {dataset_size_tokens / 1e9:.2f}B tokens")
+    
+    # Calculate optimizer steps for the requested number of epochs
+    num_epochs = training_params['num_epochs']
+    tokens_to_process = int(num_epochs * dataset_size_tokens)
+    total_iterations = tokens_to_process // training_params['tokens_processed']
     max_grad_norm = training_params['gradnorm'] if training_params['gradnorm'] != 0. else float('inf')
     
     # Support fractional epochs by calculating max micro-steps
-    num_epochs = training_params['num_epochs']
-    steps_per_epoch = len(train_dataloader)
-    max_microsteps = int(num_epochs * steps_per_epoch)
-    if master_process: print(f"Training for {num_epochs} epochs = {max_microsteps} micro-steps = {max_microsteps // grad_accum_steps} optimizer steps")
+    max_optimizer_steps = total_iterations
+    max_microsteps = max_optimizer_steps * grad_accum_steps
+    if master_process: print(f"Training for {num_epochs} epochs = {max_optimizer_steps} optimizer steps = {max_microsteps} micro-steps")
 
     load_ckpt_step = logging_params['load_ckpt_step']
     if load_ckpt_step != 0:
@@ -472,8 +482,9 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     for param_group_ix, param_group in enumerate(optimizer.param_groups):
                         wandb_log_dict[f"train/lr_{param_group_ix}"] = param_group['lr']
                     
-                    # B) PE-internal metrics (every 100 steps)
-                    if step % 100 == 0:
+                    # B) PE-internal metrics (at svd_log_step frequency)
+                    svd_log_step = logging_params.get('svd_log_step', 1600)
+                    if step % svd_log_step == 0:
                         # Log orthogonality before PE (input gradient quality)
                         if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
                             wandb_log_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])  # Average last 10
@@ -484,12 +495,11 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
                             wandb_log_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
                     
-                    # C) & D) Attention health and light scales (every 100 steps)
-                    if step % 100 == 0:
+                    # C) & D) Attention health and light scales (at svd_log_step frequency)
+                    if step % svd_log_step == 0:
                         try:
-                            # Compute SVD at configurable frequency (default: every 100 steps)
-                            svd_log_step = logging_params.get('svd_log_step', 100)
-                            compute_svd = (step % svd_log_step == 0)
+                            # Always compute SVD when we're logging advanced metrics
+                            compute_svd = True
                             advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=compute_svd)
                             wandb_log_dict.update(advanced_metrics)
                         except Exception as e:
