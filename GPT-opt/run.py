@@ -56,7 +56,7 @@ list_optimizer_params = config["optimizer_params"]
 torch.set_float32_matmul_precision(training_params['tensorcore_precision'])
 
 # Load data
-dataset_path = DATA_DIR + f"/{config['dataset']['name']}-gpt2/"
+dataset_path = os.path.join(DATA_DIR, f"{config['dataset']['name']}-gpt2")
 if master_process: print(f"Load data from {dataset_path}")
 B, T = training_params['batch_size'], training_params['context_length']
 assert training_params['tokens_processed'] % (world_size * B * T) == 0 

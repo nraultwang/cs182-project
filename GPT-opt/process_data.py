@@ -9,10 +9,12 @@ from gptopt.data_utils import tokenize, write_datafile, process_and_save_docs
 datadict = {
     "fineweb10B" : ["HuggingFaceFW/fineweb", "sample-10BT"],
     "fineweb_edu10B" : ["HuggingFaceFW/fineweb-edu", "sample-10BT"],
+    "finewebmini" : ["HuggingFaceFW/fineweb", "sample-10BT"],  # Use same as fineweb10B, can subset later
+    "fineweb1B" : ["PatrickHaller/fineweb-1B", ""],  # 1B tokens dataset
     "tiny_shakespeare" : ["tiny_shakespeare", ""],
     "wikitext" : ["wikitext", "wikitext-103-v1"]    
 }
-DATA_DIR = "/mnt/ceph/users/cmodi/huggingface/"
+DATA_DIR = os.getenv("DATA_DIR", "/mnt/ceph/users/cmodi/huggingface/")
 
 # parse command line arguments
 parser = argparse.ArgumentParser(description="Preprocessing hugging face datasets")
@@ -25,12 +27,16 @@ args = parser.parse_args()
 name = args.name
 hf_path, remote_name = datadict[name]
 enc = tiktoken.get_encoding(args.tokenizer)
-dataset_path = DATA_DIR + f'/{name}-{args.tokenizer}/'
+dataset_path = os.path.join(DATA_DIR, f'{name}-{args.tokenizer}')
 os.makedirs(dataset_path, exist_ok=True)
 print("Data will be saved in the path : ", dataset_path)
 
 # download dataset
-dataset = load_dataset(hf_path, name=remote_name, trust_remote_code=True)
+# Note: trust_remote_code is deprecated, removed for newer datasets library versions
+if remote_name:
+    dataset = load_dataset(hf_path, name=remote_name)
+else:
+    dataset = load_dataset(hf_path)
 
 # Process and save it
 if name == "tiny_shakespeare":

@@ -1,0 +1,34 @@
+# Main Hydra configuration file
+# This file defines the structure and defaults for the entire config
+
+defaults:
+  - gpt_model: gpt-small        # Default model config
+  - training_data: finewebmini  # Default dataset config
+  - _self_                      # Include this file's content
+
+# Optimizer configuration
+optimizer_params:
+  name: adamw
+  args:
+    lr: 0.001
+    weight_decay: 0.1
+
+# Learning rate schedule
+lr_schedule:
+  name: constant-linear
+  warm_up_fraction: 0.4
+
+# Logging configuration
+logging_params:
+  val_tokens_processed: 16384  # 2^14
+  log_step: 50
+  val_step: 50
+  save_ckpt_step: 500
+  load_ckpt_step: 0
+  keep_last: 2
+  save_checkpoint: true  # Enable by default for long runs
+  svd_log_step: 100
+  wandb:
+    project: "cs182-polar-express"
+    dir: "outputs/wandb"
+    tags: []

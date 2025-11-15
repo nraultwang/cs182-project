@@ -1,0 +1,82 @@
+# Configuration for testing different PolarExpress coefficient settings
+# GPT-2 Small (124M params) on FineWeb1B dataset
+
+# Optimizer settings - testing different PolarExpress configurations
+optimizer_params:
+  # Paper's default: 5 iterations, safety=1.01, cushion=0.024
+  - name: muon-polarexpress
+    lr: [0.01]
+    weight_decay: 0.1
+    momentum: 0.95
+    ns_steps: 5
+    rms_scaling: true
+    lr_schedule: constant-linear
+    warm_up_fraction: 0.4
+    polar_num_iters: 5      # Number of iterations (3, 5, or 7)
+    polar_safety: 1.01      # Safety factor (1.0 or 1.01)
+    polar_cushion: 0.024    # Cushion parameter (0.1, 0.05, or 0.024)
+
+  # Alternative: 3 iterations, no safety, large cushion
+  - name: muon-polarexpress
+    lr: [0.01]
+    weight_decay: 0.1
+    momentum: 0.95
+    ns_steps: 5
+    rms_scaling: true
+    lr_schedule: constant-linear
+    warm_up_fraction: 0.4
+    polar_num_iters: 3
+    polar_safety: 1.0
+    polar_cushion: 0.1
+
+  # Alternative: 7 iterations, safety, medium cushion
+  - name: muon-polarexpress
+    lr: [0.01]
+    weight_decay: 0.1
+    momentum: 0.95
+    ns_steps: 5
+    rms_scaling: true
+    lr_schedule: constant-linear
+    warm_up_fraction: 0.4
+    polar_num_iters: 7
+    polar_safety: 1.01
+    polar_cushion: 0.05
+
+# Training parameters
+training_params:
+  tokens_processed: 524288      # 2^19
+  val_tokens_processed: 8388608 # 2^23
+  batch_size: 16
+  num_epochs: 1
+  context_length: 1024
+  gradnorm: 1.0
+  tensorcore_precision: high    # Can be highest, high, or medium
+  autocast: true
+  mixed_precision: bfloat16
+  compile: true
+
+# Logging parameters
+logging_params:
+  val_tokens_processed: 8388608 # 2^23
+  log_step: 50
+  val_step: 500
+  save_ckpt_step: 500
+  load_ckpt_step: 0
+  keep_last: 2
+  ckpt_dir: "outputs/checkpoints"
+  results_dir: "outputs/results"
+  wandb:
+    project: "polar-express-sweep"
+    dir: "outputs/wandb"
+
+# GPT-2 Small: 124M params
+gpt_model:
+  n_embd: 768
+  n_layer: 12
+  n_head: 12
+  vocab_size: 50257
+  flash_attention: true
+
+# FineWeb1B dataset
+dataset:
+  name: "fineweb1B"
