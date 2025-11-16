@@ -35,16 +35,16 @@ parameters:
     values: [0.01, 0.1]
   
   # Muon-specific: PolarExpress settings (paper defaults)
-  optimizer_params.args.polar_method:
+  +optimizer_params.args.polar_method:
     value: polarexpress
   
-  optimizer_params.args.polar_num_iters:
+  +optimizer_params.args.polar_num_iters:
     value: 5
   
-  optimizer_params.args.polar_safety:
+  +optimizer_params.args.polar_safety:
     value: 1.01
   
-  optimizer_params.args.polar_cushion:
+  +optimizer_params.args.polar_cushion:
     value: 0.024
   
   +optimizer_params.args.ns_steps:
