@@ -83,6 +83,8 @@ def main(config : DictConfig):
     # Setup optimizer
     optimizer_obj = get_optimizer_factory(opt_config['name'])
     opt_config_args = opt_config['args']
+    # Filter out None/null values to avoid passing unused parameters to optimizer
+    opt_config_args = {k: v for k, v in opt_config_args.items() if v is not None}
     if opt_config['name'] in ['muon']: opt_config_args['nheads'] = config['gpt_model'].get('n_head', None)
     optimizer = optimizer_obj(model_copy.named_parameters(), **opt_config_args)
     scheduler = get_scheduler(config['lr_schedule'], optimizer, total_iterations=total_iterations)
