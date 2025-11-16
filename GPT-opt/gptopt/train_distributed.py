@@ -35,84 +35,110 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
     with torch.no_grad():
         # E) SVD metrics on sentinel matrices (expensive, only when requested)
         if compute_svd:
-            import time
+            # Sample 3 representative matrices: first, middle, last
             svd_targets = [
                 ('h.0.attn.c_attn.weight', 'layer0'),   # First layer attention
                 ('h.5.attn.c_attn.weight', 'layer5'),   # Middle layer attention
                 ('h.11.attn.c_attn.weight', 'layer11'), # Last layer attention
             ]
-            svd_times = []
+            
+            # Helper function to compute SVD metrics
             def compute_svd_metrics(matrix, prefix):
-                """Compute SVD metrics for a matrix and store with given prefix. Also log timing."""
-                start = time.time()
+                """Compute SVD metrics for a matrix and store with given prefix."""
                 U, S, Vh = torch.linalg.svd(matrix, full_matrices=False)
-                elapsed = (time.time() - start) * 1000  # ms
-                svd_times.append(elapsed)
-                metrics[f'{prefix}/svd_time_ms'] = elapsed
+                
                 sigma_max = S[0].item()
                 sigma_min = S[-1].item()
                 condition_number = sigma_max / (sigma_min + 1e-10)
                 effective_rank = (S.sum() / (sigma_max + 1e-10)).item()
+                
                 metrics[f'{prefix}/sigma_max'] = sigma_max
                 metrics[f'{prefix}/sigma_min'] = sigma_min
                 metrics[f'{prefix}/condition_number'] = condition_number
                 metrics[f'{prefix}/effective_rank'] = effective_rank
+                
                 if len(S) > 1:
                     metrics[f'{prefix}/spectral_gap'] = (S[0] / S[1]).item()
+            
             for target_name, layer_label in svd_targets:
                 try:
                     for name, param in model.named_parameters():
                         if target_name in name:
                             W = param.data
+                            
+                            # Reshape if needed
                             if W.ndim > 2:
                                 W = W.view(W.size(0), -1)
+                            
+                            # Split QKV weight matrix into Q, K, V (each 768 × 768)
+                            # c_attn.weight is [2304, 768] = [Q; K; V] stacked vertically
                             if W.size(0) == 2304 and W.size(1) == 768:
-                                Q = W[0:768, :]
-                                K = W[768:1536, :]
-                                V = W[1536:2304, :]
+                                Q = W[0:768, :]      # First 768 rows
+                                K = W[768:1536, :]   # Middle 768 rows
+                                V = W[1536:2304, :]  # Last 768 rows
+                                
+                                # Compute SVD for each projection
                                 compute_svd_metrics(Q, f'svd/{layer_label}_q')
                                 compute_svd_metrics(K, f'svd/{layer_label}_k')
                                 compute_svd_metrics(V, f'svd/{layer_label}_v')
                             else:
+                                # Fallback: compute on full matrix if not standard QKV shape
                                 compute_svd_metrics(W, f'svd/{layer_label}_qkv')
-                            break
+                            
+                            break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute SVD for {layer_label}: {e}")
+            
+            # Also compute SVD on momentum buffers (updates) if using Muon
+            # This directly measures what PolarExpress operates on
             if hasattr(optimizer, 'param_groups'):
                 try:
                     for group in optimizer.param_groups:
                         for p in group['params']:
                             if optimizer.state.get(p, {}).get('use_muon', False):
+                                # Get the parameter name
                                 param_name = None
                                 for name, param in model.named_parameters():
                                     if param is p:
                                         param_name = name
                                         break
+                                
                                 if param_name is None:
                                     continue
+                                
+                                # Check if this is one of our target layers
                                 for target_name, layer_label in svd_targets:
                                     if target_name in param_name:
                                         state = optimizer.state[p]
                                         if 'momentum_buffer' in state:
                                             buf = state['momentum_buffer']
+                                            
+                                            # Reshape if needed (same as Muon does)
                                             if buf.ndim > 2:
                                                 buf = buf.view(buf.size(0), -1)
+                                            
+                                            # Split momentum buffer into Q, K, V updates
+                                            # Note: Even though PE processes stacked (2304×768) when split_heads=False,
+                                            # we still want to measure per-projection conditioning for analysis
                                             if buf.size(0) == 2304 and buf.size(1) == 768:
-                                                Q_buf = buf[0:768, :]
-                                                K_buf = buf[768:1536, :]
-                                                V_buf = buf[1536:2304, :]
+                                                Q_buf = buf[0:768, :]      # Q update
+                                                K_buf = buf[768:1536, :]   # K update
+                                                V_buf = buf[1536:2304, :]  # V update
+                                                
+                                                # Compute SVD for each update projection
                                                 compute_svd_metrics(Q_buf, f'svd/update_{layer_label}_q')
                                                 compute_svd_metrics(K_buf, f'svd/update_{layer_label}_k')
                                                 compute_svd_metrics(V_buf, f'svd/update_{layer_label}_v')
+                                                
+                                                # Also compute on full stacked buffer (what PE actually sees)
                                                 compute_svd_metrics(buf, f'svd/update_{layer_label}_stacked')
                                             else:
+                                                # Fallback: compute on full buffer
                                                 compute_svd_metrics(buf, f'svd/update_{layer_label}')
-                                        break
+                                        
+                                        break  # Found the target, move to next
                 except Exception as e:
-                    print(f"Warning: Could not compute SVD for Muon buffer: {e}")
-            # Log total SVD time for this event
-            if svd_times:
-                metrics['svd/total_time_ms'] = sum(svd_times)
+                    print(f"Warning: Could not compute SVD for momentum buffers: {e}")
             
             # Compute weight orthogonality: ||W^T W - I||_F
             # This measures if weights maintain orthogonality over training
