@@ -12,6 +12,14 @@ optimizer_params:
   args:
     lr: 0.001
     weight_decay: 0.1
+    # Optional parameters (can be overridden by sweeps)
+    betas: null
+    ns_steps: null
+    polar_method: null
+    polar_num_iters: null
+    polar_safety: null
+    polar_cushion: null
+    adamw_betas: null
 
 # Learning rate schedule
 lr_schedule:
