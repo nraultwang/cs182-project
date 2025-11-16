@@ -35,6 +35,7 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
     with torch.no_grad():
         # E) SVD metrics on sentinel matrices (expensive, only when requested)
         if compute_svd:
+            svd_start_time = time.time()
             # Sample 3 representative matrices: first, middle, last
             svd_targets = [
                 ('h.0.attn.c_attn.weight', 'layer0'),   # First layer attention
@@ -183,6 +184,10 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                             break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute orthogonality for {layer_label}: {e}")
+            
+            # Log total SVD computation time
+            svd_total_time = (time.time() - svd_start_time) * 1000  # Convert to ms
+            metrics['svd/total_time_ms'] = svd_total_time
     
     with torch.no_grad():
         # C) Attention health - sample from first, middle, and last layers
@@ -475,8 +480,8 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     else:
                         wandb_log_dict["train/naninf_flag"] = 0.0
                     
-                    # Amplitude check (every 10 steps or if NaN detected)
-                    if step % 10 == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
+                    # Amplitude check (at log_step frequency or if NaN detected for immediate alarm)
+                    if step % log_step == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
                         grad_list = [p.grad.abs().max().item() for p in model.parameters() if p.grad is not None]
                         if grad_list:  # Only compute if gradients exist
                             max_grad = max(grad_list)
