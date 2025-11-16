@@ -48,7 +48,7 @@ parameters:
     value: 3200
   
   logging_params.svd_log_step:
-    value: 1600
+    value: 800
   
   logging_params.wandb.project:
     value: "cs182-polar-express"

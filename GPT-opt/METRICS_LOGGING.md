@@ -2,46 +2,73 @@
 
 This document describes all metrics logged during training, organized by category following best practices for LLM training monitoring.
 
+## Logging Configuration
+
+**Configurable via sweep YAML** (`logging_params`):
+- `log_step`: Frequency for end-to-end metrics (in micro-steps, default: 160 = every 10 optimizer steps)
+- `val_step`: Frequency for validation (in micro-steps, default: 3200 = every 200 optimizer steps)
+- `svd_log_step`: Frequency for SVD/orthogonality metrics (in micro-steps, default: 800 = every 50 optimizer steps)
+
+**Current Sweep Frequencies:**
+- **Phase 0** (0.2 epochs, 381 steps): log_step=160 → ~38 end-to-end log points; svd_log_step=800 → 0 SVD events
+- **Phase 1** (1.0 epoch, 1,907 steps): log_step=160 → ~191 end-to-end log points; svd_log_step=800 → ~38 SVD/diagnostic events
+
 ## Quick Summary
 
-**Total Metrics: ~178** across 6 categories, automatically logged to W&B
+**Total Metrics: ~181** across 6 categories, automatically logged to W&B
 
-| Category | Purpose | Count | Frequency | Overhead |
-|----------|---------|-------|-----------|----------|
-| **End-to-end** | Training quality & efficiency | 6 | Every step | < 0.1ms |
-| **PolarExpress** | Optimizer health (if using PE) | 2 | Every 100 steps | < 0.1ms |
-| **Attention Health** | Catch head collapse across depth | 21 | Every 100 steps | ~0.8ms |
-| **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every 100 steps | ~0.4ms |
-| **SVD + Orthogonality** | Per-projection conditioning analysis | 123 | Every 500 steps | ~140ms |
-| **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | < 0.1ms |
+| Category | Purpose | Count | Frequency | Phase 0 | Phase 1 | Overhead |
+|----------|---------|-------|-----------|---------|---------|----------|
+| **End-to-end** | Training quality & efficiency | 8 | Every log_step (10 steps) | 38 pts | 191 pts | 0.0008% |
+| **PolarExpress** | Optimizer health (if using PE) | 3 | Every svd_log_step (50 steps) | 0 evt | 38 evt | <0.001% |
+| **Attention Health** | Catch head collapse across depth | 21 | Every svd_log_step (50 steps) | 0 evt | 38 evt | 0.0016% |
+| **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every svd_log_step (50 steps) | 0 evt | 38 evt | 0.0008% |
+| **SVD + Orthogonality** | Per-projection conditioning analysis | 123 | Every svd_log_step (50 steps) | 0 evt | 38 evt | **0.029%** |
+| **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | 381 | 1,907 | <0.001% |
+| **PHASE TOTAL** | — | **181** | — | **0.003%** | **0.031%** | — |
+
+**W&B Logging:**
+- End-to-end metrics logged at `log_step=160` (every 10 steps)
+- All diagnostics (PE, attention, scales, SVD) logged at `svd_log_step=800` (every 50 steps)
+- Stability alarms logged every step
+- Current combined overhead: **0.031% for Phase 1** (negligible, ~5.6 seconds of 18,115 second runtime)
 
 **Key Features:**
 - ✅ **Depth-aware**: Tracks layers 0, 5, 11 (first/middle/last) to diagnose where issues occur
 - ✅ **Efficient**: ~0.14% average overhead across all steps (1.2ms per regular step)
 - ✅ **Comprehensive**: Covers convergence, attention health, gradient flow, weight conditioning
 - ✅ **Actionable**: Each metric has clear "good range" and alerts
-- ✅ **Auto-logged to W&B**: Pass `wandb_run` and all 76 metrics are automatically tracked
+- ✅ **Auto-logged to W&B**: Pass `wandb_run` and all metrics are automatically tracked
 - ✅ **Production-ready**: Based on LLM training best practices with heavy optimizations
 
-## A) End-to-end Metrics (Every Step)
+## A) End-to-end Metrics (Every `log_step`)
 
 **Purpose:** Primary quality signal and generalization check
 
+**Logged to W&B at frequency:** `log_step` (configurable, currently 160 microsteps = 10 optimizer steps)
+
+**Note on Loss Logging:** 
+- `train/loss` is computed every optimizer step for accumulation/averaging
+- Logged to W&B only at `log_step` intervals to balance metric granularity vs W&B overhead
+- At Phase 0/1 default (every 10 steps), provides sufficient granularity (~38-190 points) for analysis
+- To log every step: Set `log_step=16` (1 optimizer step), but adds ~100x W&B calls (not recommended)
+
 | Metric | Description | Good Range | Alerts |
 |--------|-------------|------------|---------|
-| `train/loss` | Cross-entropy training loss | Decreasing | Spikes, NaN |
+| `train/loss` | Cross-entropy training loss (averaged over grad_accum_steps) | Decreasing | Spikes, NaN |
 | `val/loss` | Cross-entropy validation loss | Decreasing | Increases (overfitting) |
 | `val/ppl` | Validation perplexity (exp(loss)) | Decreasing | > 1000 (poor model) |
 | `train/lr` | Current learning rate | Config-dependent | - |
 | `train/tokens_per_sec` | Training throughput | Maximize | Drops (bottleneck) |
-| `train/step_time_ms` | Time per step (ms) | Minimize | Spikes |
+| `train/step_time_ms` | Wall clock time per optimizer step (ms) | Minimize | Spikes indicate slowdown |
 
 **Convergence & Speed/Cost:**
 - `train/loss` should decrease smoothly
 - `val/loss` tracks generalization (gap indicates overfitting)
 - `tokens_per_sec` measures training efficiency
+- `train/step_time_ms` tracks optimizer overhead (Muon > AdamW)
 
-## B) PolarExpress-Internal Metrics (Every 100 Steps)
+## B) PolarExpress-Internal Metrics (Every `svd_log_step` = 50 steps)
 
 **Purpose:** Verify PE did its job and what it cost
 
@@ -66,7 +93,7 @@ This document describes all metrics logged during training, organized by categor
 **Note:** Only logged when using `muon-polarexpress` optimizer. Supports `num_iters=0` (normalization only).
 **Overhead:** ~200ms every 100 steps for both before/after matmuls (0.02% of training time).
 
-## C) Multi-Layer Attention Health (Every 100 Steps)
+## C) Multi-Layer Attention Health (Every 50 Steps)
 
 **Purpose:** Catch head collapse early and track depth-dependent behavior
 
@@ -96,7 +123,7 @@ This document describes all metrics logged during training, organized by categor
 
 **Total:** 21 attention metrics (7 metrics × 3 layers)
 
-## D) Weight Scales & Gradient Flow (Every 100 Steps)
+## D) Weight Scales & Gradient Flow (Every 50 Steps)
 
 **Purpose:** Localize problems via scale/gradient checks across network depth
 
@@ -142,7 +169,7 @@ This document describes all metrics logged during training, organized by categor
 **Why early layers only?** Gradients must flow through entire network to reach early layers, so problems manifest here most clearly. Later layers naturally have larger gradients.
 **Total:** 4 subpath metrics
 
-## E) SVD-Based Weight Analysis (Every 500 Steps)
+## E) SVD-Based Weight Analysis (Every 50 Steps)
 
 **Purpose:** Deep analysis of weight matrix conditioning and rank
 
@@ -221,7 +248,7 @@ This document describes all metrics logged during training, organized by categor
 - Orthogonality: 2 metrics × 3 projections × 3 layers = 18
 - **Grand total: 123 metrics** (but only computed every 500 steps)
 
-**Note:** SVD + orthogonality computed every 500 steps (~130-150ms total overhead)
+**Note:** SVD + orthogonality computed every 50 steps (~140ms total overhead per computation)
 
 ## F) Numeric Stability Alarms (Every Step)
 
@@ -258,32 +285,26 @@ attn/maxA/frac>0.95
 
 ## Frequency Summary
 
-| Frequency | Metrics | Count | Overhead |
-|-----------|---------|-------|----------|
-| **Every step** | train/loss, train/grad_norm, train/lr, tokens_per_sec, naninf_flag | ~6 | Negligible |
-| **Every 10 steps** | amp_scaler, amp_overflows | 2 | < 0.1ms |
-| **Every 100 steps** | pe/*, logits/layer*/*, attn/layer*/*, qkv/layer*/*, grads/*, weights/* | ~45 | ~1.2ms |
-| **Every svd_log_step (default: 100)** | svd/layer*_{q,k,v}/*, svd/update_*/*, ortho/layer*_{q,k,v}/* | 123 | ~140ms |
-| **Every val_step** | val/loss, val/ppl | 2 | Variable |
+| Frequency | Metrics | Phase 0 Events | Phase 1 Events | Cost/Event | Phase 0 Total | Phase 1 Total | Phase 0 % | Phase 1 % |
+|-----------|---------|-------|-----------|---------|-------|-----------|----------|----------|
+| **Every 10 steps (log_step)** | train/loss, train/*, tokens_per_sec, naninf_flag | 38 | 191 | 0.1ms | ~4ms | ~15ms | 0.0004% | 0.0008% |
+| **Every 50 steps (svd_log_step)** | pe/*, logits/*, attn/*, qkv/*, grads/*, weights/* | 0 | 38 | 0.8ms | 0ms | ~30ms | 0% | 0.0016% |
+| **Every 50 steps (svd_log_step)** | svd/*, ortho/* | 0 | 38 | 140ms | 0ms | **~5,320ms** | 0% | **0.029%** |
+| **Every step (stability)** | train/grad_norm, train/amp_* | 381 | 1,907 | 0.1ms | ~38ms | ~200ms | 0.003% | 0.001% |
+| **TOTAL OVERHEAD** | **~181 metrics** | — | — | — | **~42ms** | **~5,581ms** | **0.0034%** | **0.031%** |
 
-**Total Metrics: ~178 metrics**
+**Note:** `svd_log_step=800` (every 50 optimizer steps) configurable in `logging_params.svd_log_step`.
 
-**Note:** `svd_log_step` is configurable in `logging_params.svd_log_step` (default: 100 steps).
-
-**Computational Cost (with svd_log_step=100):**
-- Regular steps: ~1.2ms overhead per step (~0.12% of typical 1000ms step)
-- SVD + orthogonality steps: ~141.2ms overhead (~14% of step, every 100 steps)
-- Average overhead: ~1.5% across all steps (at 100-step frequency)
-
-**SVD Breakdown (per svd_log_step interval):**
-- Weight SVD: 9 matrices (3 layers × 3 projections) × ~4ms = ~36ms
+**Computational Cost Breakdown (per svd_log_step event):**
+- Weight SVD: 9 matrices (3 layers × 3 projections Q/K/V) × ~4ms = ~36ms
 - Update SVD: 12 matrices (3 layers × 4: Q/K/V/stacked) × ~4ms = ~48ms
 - Orthogonality: 9 checks (3 layers × 3 projections) × ~1ms = ~9ms
-- Total overhead: ~93ms (conservative estimate ~140ms with safety margin)
+- **Total per event: ~93ms (conservative: ~140ms with safety margin)**
 
-**Frequency Trade-offs:**
-- `svd_log_step=100`: ~1.5% overhead, ~5 samples in Phase 0/1 (good temporal resolution)
-- `svd_log_step=500`: ~0.3% overhead, ~1 sample in Phase 0/1 (minimal overhead)
+**Trade-off Analysis (svd_log_step=800 vs 1600):**
+- Old (every 100 steps): Phase 1 = 19 SVD snapshots, 0.015% overhead
+- New (every 50 steps): Phase 1 = 38 SVD snapshots, 0.029% overhead
+- **Cost: +0.014% overhead | Benefit: 2x diagnostic resolution** ✅ Excellent value for science
 
 **Optimizations Applied:**
 - ✅ Sequential layer forwarding (saves ~37% on attention metrics)

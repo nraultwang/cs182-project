@@ -374,6 +374,9 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
         pass_loss = False
     if master_process: print(f"Set pass_loss to {pass_loss} for optimizer {optimizer_name}")
 
+    # Track total training time for this run
+    training_start_time = time.time()
+    
     autocast_ctxt = contextlib.nullcontext()
     if training_params['autocast']:
         autocast_ctxt = torch.autocast(device_type=device, dtype=typedict[training_params['mixed_precision']])     
@@ -567,4 +570,14 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
 
     if hasattr(optimizer, 'step_size_list'):      # Check if optimizer has a step_size_list attribute
         logger.step_size_list = optimizer.step_size_list  
+    
+    # Log total training time to W&B
+    if master_process and wandb_run is not None:
+        total_training_time = time.time() - training_start_time
+        wandb_run.log({
+            "train/total_time_seconds": total_training_time,
+            "train/total_time_hours": total_training_time / 3600,
+        })
+        print(f"Total training time: {total_training_time:.1f} seconds ({total_training_time/3600:.2f} hours)")
+    
     return logger
