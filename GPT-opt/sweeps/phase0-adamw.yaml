@@ -32,7 +32,11 @@ parameters:
     values: [0.0001, 0.0003, 0.0006]
   
   optimizer_params.args.weight_decay:
-    value: 0.1
+    values: [0.01, 0.1]
+  
+  # AdamW betas (momentum coefficients)
+  optimizer_params.args.betas:
+    values: [[0.9, 0.999], [0.95, 0.999], [0.95, 0.95]]
   
   # Shorter training for baseline validation (0.2 epochs for fast LR search)
   training_data.training_params.num_epochs:
@@ -61,4 +65,4 @@ parameters:
   logging_params.wandb.tags:
     value: ["phase0", "baseline", "adamw"]
 
-# This creates: 3 AdamW runs with appropriate LRs
+# This creates: 3 LRs × 2 weight_decays × 3 betas = 18 AdamW runs

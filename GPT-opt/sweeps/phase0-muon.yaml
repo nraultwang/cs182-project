@@ -32,7 +32,7 @@ parameters:
     values: [0.01, 0.02, 0.04]
   
   optimizer_params.args.weight_decay:
-    value: 0.1
+    values: [0.01, 0.1]
   
   # Muon-specific: PolarExpress settings (paper defaults)
   optimizer_params.args.polar_method:
@@ -49,6 +49,10 @@ parameters:
   
   +optimizer_params.args.ns_steps:
     value: 5
+  
+  # AdamW betas for backup optimizer (embeddings, 1D params)
+  +optimizer_params.args.adamw_betas:
+    values: [[0.9, 0.999], [0.95, 0.999], [0.95, 0.95]]
   
   # Shorter training for baseline validation (0.2 epochs for fast LR search)
   training_data.training_params.num_epochs:
@@ -77,4 +81,4 @@ parameters:
   logging_params.wandb.tags:
     value: ["phase0", "baseline", "muon"]
 
-# This creates: 3 Muon runs with appropriate LRs
+# This creates: 3 LRs × 2 weight_decays × 3 adamw_betas = 18 Muon runs
