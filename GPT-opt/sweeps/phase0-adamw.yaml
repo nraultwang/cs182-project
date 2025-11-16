@@ -46,9 +46,9 @@ parameters:
     value: 524288
   
   # Logging (adjusted for gradient accumulation=16)
-  # Values are in micro-steps: 800=50 opt steps, 8000=500 opt steps, 1600=100 opt steps
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 1600=100 opt steps
   logging_params.log_step:
-    value: 800
+    value: 160
   
   logging_params.val_step:
     value: 8000

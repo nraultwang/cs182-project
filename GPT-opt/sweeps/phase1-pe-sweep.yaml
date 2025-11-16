@@ -63,17 +63,17 @@ parameters:
   +optimizer_params.args.ns_steps:
     value: 5
   
-  # Training parameters (0.3 epochs = ~572 steps = ~90 min on A6000)
+  # Training parameters (1 epoch = ~1907 steps = ~5 hours on A6000)
   training_data.training_params.num_epochs:
-    value: 0.3
+    value: 1
   
   training_data.training_params.tokens_processed:
     value: 524288  # ~500K tokens per step (adjust based on your batch size)
   
   # Logging (adjusted for gradient accumulation=16)
-  # Values are in micro-steps: 800=50 opt steps, 3200=200 opt steps, 1600=100 opt steps
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 1600=100 opt steps
   logging_params.log_step:
-    value: 800
+    value: 160
   
   logging_params.val_step:
     value: 3200
@@ -91,7 +91,7 @@ parameters:
     value: ["phase1", "sensitivity", "pe-hyperparams", "frequency-sweep"]
 
 # This creates: 9 num_iters patterns × 2 safety × 3 cushion = 54 runs
-# Total time: ~81 hours on A6000
+# Total time: ~270 hours on A6000 (~11 days)
 # 
 # Research questions:
 # 1. Quality: Does higher num_iters improve convergence? (3 vs 5 vs 7)
