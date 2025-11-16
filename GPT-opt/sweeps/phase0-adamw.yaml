@@ -50,6 +50,9 @@ parameters:
   logging_params.log_step:
     value: 160
   
+  logging_params.diag_log_step:
+    value: 160
+  
   logging_params.val_step:
     value: 8000
   

@@ -6,12 +6,20 @@ This document describes all metrics logged during training, organized by categor
 
 **Configurable via sweep YAML** (`logging_params`):
 - `log_step`: Frequency for end-to-end metrics (in micro-steps, default: 160 = every 10 optimizer steps)
+- `diag_log_step`: Frequency for diagnostics: PE, attention health, weight scales (in micro-steps, default: 160 = every 10 optimizer steps)
+- `svd_log_step`: Frequency for expensive SVD/orthogonality metrics (in micro-steps, default: 800 = every 50 optimizer steps)
 - `val_step`: Frequency for validation (in micro-steps, default: 3200 = every 200 optimizer steps)
-- `svd_log_step`: Frequency for SVD/orthogonality metrics (in micro-steps, default: 800 = every 50 optimizer steps)
 
 **Current Sweep Frequencies:**
-- **Phase 0** (0.2 epochs, 381 steps): log_step=160 → ~38 end-to-end log points; svd_log_step=800 → 0 SVD events
-- **Phase 1** (1.0 epoch, 1,907 steps): log_step=160 → ~191 end-to-end log points; svd_log_step=800 → ~38 SVD/diagnostic events
+- **Phase 0** (0.2 epochs, 381 steps): 
+  - log_step=160 → ~38 end-to-end log points
+  - diag_log_step=160 → ~38 diagnostic events
+  - svd_log_step=800 → 0 SVD events (too short)
+  
+- **Phase 1** (1.0 epoch, 1,907 steps):
+  - log_step=160 → ~191 end-to-end log points
+  - diag_log_step=160 → ~191 diagnostic events
+  - svd_log_step=800 → ~38 SVD events
 
 ## Quick Summary
 
@@ -20,18 +28,18 @@ This document describes all metrics logged during training, organized by categor
 | Category | Purpose | Count | Frequency | Phase 0 | Phase 1 | Overhead |
 |----------|---------|-------|-----------|---------|---------|----------|
 | **End-to-end** | Training quality & efficiency | 8 | Every log_step (10 steps) | 38 pts | 191 pts | 0.0008% |
-| **PolarExpress** | Optimizer health (if using PE) | 3 | Every svd_log_step (50 steps) | 0 evt | 38 evt | <0.001% |
-| **Attention Health** | Catch head collapse across depth | 21 | Every svd_log_step (50 steps) | 0 evt | 38 evt | 0.0016% |
-| **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every svd_log_step (50 steps) | 0 evt | 38 evt | 0.0008% |
+| **PolarExpress** | Optimizer health (if using PE) | 3 | Every diag_log_step (10 steps) | 38 evt | 191 evt | <0.001% |
+| **Attention Health** | Catch head collapse across depth | 21 | Every diag_log_step (10 steps) | 38 evt | 191 evt | 0.004% |
+| **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every diag_log_step (10 steps) | 38 evt | 191 evt | 0.002% |
 | **SVD + Orthogonality** | Per-projection conditioning analysis | 123 | Every svd_log_step (50 steps) | 0 evt | 38 evt | **0.029%** |
 | **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | 381 | 1,907 | <0.001% |
-| **PHASE TOTAL** | — | **181** | — | **0.003%** | **0.031%** | — |
+| **PHASE TOTAL** | — | **181** | — | **0.003%** | **0.035%** | — |
 
-**W&B Logging:**
-- End-to-end metrics logged at `log_step=160` (every 10 steps)
-- All diagnostics (PE, attention, scales, SVD) logged at `svd_log_step=800` (every 50 steps)
-- Stability alarms logged every step
-- Current combined overhead: **0.031% for Phase 1** (negligible, ~5.6 seconds of 18,115 second runtime)
+**Three Independent Logging Frequencies:**
+- **log_step (160 microsteps)**: End-to-end metrics only (cheap)
+- **diag_log_step (160 microsteps)**: PE + attention + scales diagnostics (moderate cost)
+- **svd_log_step (800 microsteps)**: Expensive SVD computation (expensive but worth it)
+- Combined overhead Phase 1: **0.035%** (~6.3 seconds out of 18,115 seconds)
 
 **Key Features:**
 - ✅ **Depth-aware**: Tracks layers 0, 5, 11 (first/middle/last) to diagnose where issues occur
@@ -68,7 +76,7 @@ This document describes all metrics logged during training, organized by categor
 - `tokens_per_sec` measures training efficiency
 - `train/step_time_ms` tracks optimizer overhead (Muon > AdamW)
 
-## B) PolarExpress-Internal Metrics (Every `svd_log_step` = 50 steps)
+## B) PolarExpress-Internal Metrics (Every `diag_log_step` = 10 steps)
 
 **Purpose:** Verify PE did its job and what it cost
 
@@ -93,7 +101,7 @@ This document describes all metrics logged during training, organized by categor
 **Note:** Only logged when using `muon-polarexpress` optimizer. Supports `num_iters=0` (normalization only).
 **Overhead:** ~200ms every 100 steps for both before/after matmuls (0.02% of training time).
 
-## C) Multi-Layer Attention Health (Every 50 Steps)
+## C) Multi-Layer Attention Health (Every 10 Steps via `diag_log_step`)
 
 **Purpose:** Catch head collapse early and track depth-dependent behavior
 
@@ -123,7 +131,7 @@ This document describes all metrics logged during training, organized by categor
 
 **Total:** 21 attention metrics (7 metrics × 3 layers)
 
-## D) Weight Scales & Gradient Flow (Every 50 Steps)
+## D) Weight Scales & Gradient Flow (Every 10 Steps via `diag_log_step`)
 
 **Purpose:** Localize problems via scale/gradient checks across network depth
 
@@ -169,7 +177,7 @@ This document describes all metrics logged during training, organized by categor
 **Why early layers only?** Gradients must flow through entire network to reach early layers, so problems manifest here most clearly. Later layers naturally have larger gradients.
 **Total:** 4 subpath metrics
 
-## E) SVD-Based Weight Analysis (Every 50 Steps)
+## E) SVD-Based Weight Analysis (Every 50 Steps via `svd_log_step`)
 
 **Purpose:** Deep analysis of weight matrix conditioning and rank
 
@@ -287,24 +295,29 @@ attn/maxA/frac>0.95
 
 | Frequency | Metrics | Phase 0 Events | Phase 1 Events | Cost/Event | Phase 0 Total | Phase 1 Total | Phase 0 % | Phase 1 % |
 |-----------|---------|-------|-----------|---------|-------|-----------|----------|----------|
-| **Every 10 steps (log_step)** | train/loss, train/*, tokens_per_sec, naninf_flag | 38 | 191 | 0.1ms | ~4ms | ~15ms | 0.0004% | 0.0008% |
-| **Every 50 steps (svd_log_step)** | pe/*, logits/*, attn/*, qkv/*, grads/*, weights/* | 0 | 38 | 0.8ms | 0ms | ~30ms | 0% | 0.0016% |
-| **Every 50 steps (svd_log_step)** | svd/*, ortho/* | 0 | 38 | 140ms | 0ms | **~5,320ms** | 0% | **0.029%** |
-| **Every step (stability)** | train/grad_norm, train/amp_* | 381 | 1,907 | 0.1ms | ~38ms | ~200ms | 0.003% | 0.001% |
-| **TOTAL OVERHEAD** | **~181 metrics** | — | — | — | **~42ms** | **~5,581ms** | **0.0034%** | **0.031%** |
+| **log_step=160** (10 steps) | train/loss, train/*, tokens_per_sec, naninf_flag | 38 | 191 | 0.1ms | ~4ms | ~15ms | 0.0004% | 0.0008% |
+| **diag_log_step=160** (10 steps) | pe/*, logits/*, attn/*, qkv/*, grads/*, weights/* | 38 | 191 | 0.8ms | ~30ms | ~150ms | 0.003% | **0.0083%** |
+| **svd_log_step=800** (50 steps) | svd/*, ortho/* | 0 | 38 | 140ms | 0ms | **~5,320ms** | 0% | **0.029%** |
+| **Every step** | train/grad_norm, train/amp_* | 381 | 1,907 | 0.1ms | ~38ms | ~200ms | 0.003% | 0.001% |
+| **TOTAL OVERHEAD** | **~181 metrics** | — | — | — | **~72ms** | **~5,685ms** | **0.006%** | **0.031%** |
 
-**Note:** `svd_log_step=800` (every 50 optimizer steps) configurable in `logging_params.svd_log_step`.
+**Key Change from Previous Config:**
+- Old: All diagnostics (PE, attention, scales) at svd_log_step (50 steps) → 38 events
+- New: Diagnostics at diag_log_step (10 steps) → 191 events
+- Old SVD: 38 events at 50 steps
+- New SVD: 38 events at 50 steps (unchanged)
+- **Result: 5x more diagnostic snapshots (38 → 191), only +0.0083% added overhead**
 
-**Computational Cost Breakdown (per svd_log_step event):**
-- Weight SVD: 9 matrices (3 layers × 3 projections Q/K/V) × ~4ms = ~36ms
-- Update SVD: 12 matrices (3 layers × 4: Q/K/V/stacked) × ~4ms = ~48ms
-- Orthogonality: 9 checks (3 layers × 3 projections) × ~1ms = ~9ms
-- **Total per event: ~93ms (conservative: ~140ms with safety margin)**
+**Computational Cost Breakdown:**
+- Per log_step event: 0.1ms (end-to-end only)
+- Per diag_log_step event: ~0.8ms (attention/scales without SVD)
+- Per svd_log_step event: ~140ms (expensive SVD computation)
+- **Total per full cycle: ~0.15ms + ~0.8ms + 140ms ≈ ~141ms every ~50-100 steps**
 
-**Trade-off Analysis (svd_log_step=800 vs 1600):**
-- Old (every 100 steps): Phase 1 = 19 SVD snapshots, 0.015% overhead
-- New (every 50 steps): Phase 1 = 38 SVD snapshots, 0.029% overhead
-- **Cost: +0.014% overhead | Benefit: 2x diagnostic resolution** ✅ Excellent value for science
+**Trade-off Analysis (diag_log_step = 10 vs 50):**
+- Diagnostic resolution: 38 → 191 snapshots (5x improvement)
+- Additional overhead: +0.0083% Phase 1 (negligible)
+- **Cost: +0.0083% | Benefit: 5x diagnostic resolution** ✅ Excellent trade-off
 
 **Optimizations Applied:**
 - ✅ Sequential layer forwarding (saves ~37% on attention metrics)

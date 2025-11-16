@@ -453,9 +453,13 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                 # Compute tokens per second
                 tps = training_params["tokens_processed"] / step_time
                 
-                # Only log to wandb at log_step frequency to reduce overhead
-                if master_process and wandb_run is not None and (step % logging_params['log_step'] == 0):
-                    # A) End-to-end metrics (at log_step frequency)
+                # Separate logging frequencies for different metric types
+                log_step = logging_params.get('log_step', 160)
+                diag_log_step = logging_params.get('diag_log_step', 160)  # PE, attention, scales (default: every 10 steps)
+                svd_log_step = logging_params.get('svd_log_step', 800)    # SVD only (default: every 50 steps)
+                
+                # A) End-to-end metrics (at log_step frequency)
+                if master_process and wandb_run is not None and (step % log_step == 0):
                     wandb_log_dict = {
                         "train/loss": loss_accum.item(), 
                         "train/grad_norm": norm.item(),
@@ -484,30 +488,38 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     for param_group_ix, param_group in enumerate(optimizer.param_groups):
                         wandb_log_dict[f"train/lr_{param_group_ix}"] = param_group['lr']
                     
-                    # B) PE-internal metrics (at svd_log_step frequency)
-                    svd_log_step = logging_params.get('svd_log_step', 1600)
-                    if step % svd_log_step == 0:
-                        # Log orthogonality before PE (input gradient quality)
-                        if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
-                            wandb_log_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])  # Average last 10
-                        # Log orthogonality after PE (output quality)
-                        if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
-                            wandb_log_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])  # Average last 10
-                        # Log PE execution time
-                        if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
-                            wandb_log_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
-                    
-                    # C) & D) Attention health and light scales (at svd_log_step frequency)
-                    if step % svd_log_step == 0:
-                        try:
-                            # Always compute SVD when we're logging advanced metrics
-                            compute_svd = True
-                            advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=compute_svd)
-                            wandb_log_dict.update(advanced_metrics)
-                        except Exception as e:
-                            print(f"Warning: Could not compute advanced metrics at step {step}: {e}")
-                    
                     wandb_run.log(wandb_log_dict)
+                
+                # B) PE-internal metrics + C) Attention health + D) Weight/Scale metrics (at diag_log_step frequency)
+                if master_process and wandb_run is not None and (step % diag_log_step == 0):
+                    wandb_diag_dict = {}
+                    
+                    # PE metrics
+                    if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
+                        wandb_diag_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])
+                    if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
+                        wandb_diag_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])
+                    if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
+                        wandb_diag_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
+                    
+                    # Attention health and weight scales (compute_svd=False to skip expensive SVD)
+                    try:
+                        advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=False)
+                        wandb_diag_dict.update(advanced_metrics)
+                    except Exception as e:
+                        print(f"Warning: Could not compute diagnostic metrics at step {step}: {e}")
+                    
+                    if wandb_diag_dict:
+                        wandb_run.log(wandb_diag_dict)
+                
+                # E) SVD-based metrics (at svd_log_step frequency - expensive, keep at 50 steps)
+                if master_process and wandb_run is not None and (step % svd_log_step == 0):
+                    try:
+                        # Expensive SVD computation
+                        advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=True)
+                        wandb_run.log(advanced_metrics)
+                    except Exception as e:
+                        print(f"Warning: Could not compute SVD metrics at step {step}: {e}")
                 logger.step_times.append(step_time)  # Are these different across ranks?
                 logger.grad_norms.append(norm.item())
                 for param_group in optimizer.param_groups:

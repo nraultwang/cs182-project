@@ -27,6 +27,7 @@ logging_params:
   load_ckpt_step: 0
   keep_last: 2
   save_checkpoint: true  # Enable by default for long runs
+  diag_log_step: 50
   svd_log_step: 50
   wandb:
     project: "cs182-polar-express"
