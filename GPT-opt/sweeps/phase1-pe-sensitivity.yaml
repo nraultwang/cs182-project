@@ -1,0 +1,102 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase1-pe-sensitivity"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer base
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (fixed for Phase 1) - Muon paper standard
+  optimizer_params.args.lr:
+    value: 0.02
+  
+  optimizer_params.args.weight_decay:
+    value: 0.1
+  
+  # PolarExpress method
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  # PolarExpress hyperparameters - THE MAIN SWEEP
+  # Test num_iters including cycling patterns for computational efficiency
+  optimizer_params.args.polar_num_iters:
+    values: 
+      - [3]      # 3 iterations always
+      - [3, 0]   # Cycle: 3 then skip (50% cost reduction)
+      - [5]      # 5 iterations always
+      - [5, 0]   # Cycle: 5 then skip (50% cost reduction)
+      - [5, 3]   # Cycle: 5 then 3 (~20% cost reduction)
+      - [7]      # 7 iterations always
+      - [7, 0]   # Cycle: 7 then skip (50% cost reduction)
+      - [7, 5]   # Cycle: 7 then 5 (~15% cost reduction)
+      - [7, 3]   # Cycle: 7 then 3 (~30% cost reduction)
+  
+  optimizer_params.args.polar_safety:
+    values: [1.00, 1.01]
+  
+  # Paper's magic cushion value: 0.024 = 0.02407327424182761 (exact from paper)
+  optimizer_params.args.polar_cushion:
+    values: [0.01, 0.024, 0.05]
+  
+  # Newton-Schulz steps (Muon parameter)
+  +optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Training parameters (0.3 epochs = ~572 steps = ~90 min on A6000)
+  training_data.training_params.num_epochs:
+    value: 0.3
+  
+  training_data.training_params.tokens_processed:
+    value: 524288  # ~500K tokens per step (adjust based on your batch size)
+  
+  # Logging (adjusted for gradient accumulation=16)
+  # Values are in micro-steps: 800=50 opt steps, 3200=200 opt steps, 1600=100 opt steps
+  logging_params.log_step:
+    value: 800
+  
+  logging_params.val_step:
+    value: 3200
+  
+  logging_params.svd_log_step:
+    value: 1600
+  
+  logging_params.save_ckpt_step:
+    value: 80000
+  
+  logging_params.wandb.project:
+    value: "cs182-polar-express"
+  
+  logging_params.wandb.tags:
+    value: ["phase1", "sensitivity", "pe-hyperparams", "frequency-sweep"]
+
+# This creates: 9 num_iters patterns × 2 safety × 3 cushion = 54 runs
+# Total time: ~81 hours on A6000
+# 
+# Research questions:
+# 1. Quality: Does higher num_iters improve convergence? (3 vs 5 vs 7)
+# 2. Efficiency: Can cycling reduce compute without hurting convergence?
+#    - [5,0] vs [5]: 50% cost reduction
+#    - [5,3] vs [5]: 20% cost reduction
+# 3. Stability: Does safety=1.01 prevent numerical issues?
+# 4. Spectrum: Which cushion value works best?

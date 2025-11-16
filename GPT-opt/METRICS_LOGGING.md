@@ -191,6 +191,8 @@ This document describes all metrics logged during training, organized by categor
 | `svd/layer{0,5,11}_{q,k,v}/condition_number` | σ_max / σ_min per projection | < 1000 | > 10000 (ill-conditioned) |
 | `svd/layer{0,5,11}_{q,k,v}/effective_rank` | Effective rank per projection | 50-90% of full rank | Dropping over time |
 | `svd/layer{0,5,11}_{q,k,v}/spectral_gap` | σ_1 / σ_2 per projection | 2-10 | > 100 (low rank) |
+| `svd/layer{0,5,11}_{q,k,v}/svd_time_ms` | Wall time to compute SVD for this matrix (ms) | Minimize | Spikes (hardware/shape issue) |
+| `svd/total_time_ms` | Total wall time to compute all SVDs for this event (ms) | Minimize | Spikes (unexpected overhead) |
 
 **Weight Health Indicators:**
 - **Per-projection analysis**: Q, K, V computed separately (each 768×768)
@@ -198,6 +200,7 @@ This document describes all metrics logged during training, organized by categor
   - V often degrades faster than Q/K in practice
 - **Condition number**: Measures numerical stability of weight matrix
   - High values (> 10000) = matrix nearly singular, optimization difficulty
+- **SVD timing**: `svd/layer*/svd_time_ms` gives the time to compute each SVD (per matrix), and `svd/total_time_ms` gives the total time for all SVDs in the event. Use these to monitor SVD overhead and hardware performance.
   - Shows long-term accumulation of conditioning issues
 - **Effective rank**: How many "directions" the weight matrix uses
   - Dropping rank = loss of expressivity
