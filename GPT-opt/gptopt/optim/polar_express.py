@@ -45,7 +45,7 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     Get coefficient list for specified configuration.
     
     Args:
-        num_iters: List of number of iterations (3, 5, or 7). If None, use default.
+        num_iters: Number of iterations (3, 5, or 7) or list of such values. If None, use default.
         safety: Safety factor (1.0 or 1.01)
         cushion: Cushion parameter. Library provides:
                  - 0.1 (or close)
@@ -62,6 +62,10 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     if num_iters is None:
         # Use default 8-iteration config
         return [DEFAULT_COEFFS_LIST]
+    
+    # Convert single integer to list for consistent handling
+    if isinstance(num_iters, int):
+        num_iters = [num_iters]
     
     if COEFFS_LIBRARY is None:
         warnings.warn("Coefficient library not available, using default coefficients")
