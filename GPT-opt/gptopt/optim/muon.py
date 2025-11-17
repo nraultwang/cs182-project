@@ -343,7 +343,6 @@ class Muon(torch.optim.Optimizer):
 
                 # Use the selected polar factorization method
                 import time as time_module
-                pe_start = time_module.time()
                 
                 # Compute orthogonality error every 100 steps using cached XTX
                 if not hasattr(self, '_pe_step_count'):
@@ -358,10 +357,16 @@ class Muon(torch.optim.Optimizer):
                 use_polarexpress = (hasattr(current_factorizer, 'func') and 
                                    current_factorizer.func.__name__ == 'PolarExpress')
                 
+                # Start timing just before the actual PE call
+                pe_start = time_module.time()
+                
                 if compute_ortho and use_polarexpress:
                     try:
                         # Request XTX to compute ortho error efficiently (before and after)
                         result = current_factorizer(g, group["ns_steps"], return_ortho_info=True)
+                        # Stop timing immediately after PE call, before diagnostic computation
+                        pe_time = (time_module.time() - pe_start) * 1000  # ms
+                        
                         if isinstance(result, tuple) and len(result) == 3:
                             u, XTX_before, XTX_after = result
                             # Compute ||XTX - I||_F using cached XTX values
@@ -401,15 +406,17 @@ class Muon(torch.optim.Optimizer):
                     except Exception as e:
                         # Fallback if return_ortho_info not supported
                         u = current_factorizer(g, group["ns_steps"])
+                        pe_time = (time_module.time() - pe_start) * 1000  # ms
                 else:
                     u = current_factorizer(g, group["ns_steps"])
+                    pe_time = (time_module.time() - pe_start) * 1000  # ms
+                
+                # Store PE time (measured before any diagnostic computation)
+                if hasattr(self, '_pe_times'):
+                    self._pe_times.append(pe_time)
                 
                 # Increment counter after call
                 self.iter_counter += 1
-                
-                pe_time = (time_module.time() - pe_start) * 1000  # ms
-                if hasattr(self, '_pe_times'):
-                    self._pe_times.append(pe_time)
                 
                 # Reshape back to original shape after polar factorization
                 if old_shape is not None:
