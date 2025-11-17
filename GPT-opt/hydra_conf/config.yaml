@@ -6,6 +6,9 @@ defaults:
   - training_data: finewebmini  # Default dataset config
   - _self_                      # Include this file's content
 
+# Global random seed (can be overridden by sweeps)
+seed: 42
+
 # Optimizer configuration
 optimizer_params:
   name: adamw

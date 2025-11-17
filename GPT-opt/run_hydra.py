@@ -19,7 +19,8 @@ import uuid
 @hydra.main(version_base=None, config_path="hydra_conf", config_name="config")
 def main(config : DictConfig):
     config = OmegaConf.to_container(config, resolve=True)
-    set_seed(42)
+    # Use Hydra-configured seed (overridable by sweeps)
+    set_seed(config.get("seed", 42))
 
     # First set up DDP
     ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
