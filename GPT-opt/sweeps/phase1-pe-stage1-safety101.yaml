@@ -14,7 +14,7 @@ command:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "test-muon-ns"
+    value: "phase1-pe-stage1-safety101"
   
   # Dataset and model
   training_data:
@@ -27,38 +27,55 @@ parameters:
   optimizer_params.name:
     value: muon
   
-  # Learning rate (same as Phase 1)
+  # Learning rate (fixed for Phase 1)
   optimizer_params.args.lr:
     value: 0.01
   
   optimizer_params.args.weight_decay:
     value: 0.01
   
-  # AdamW betas for backup optimizer (same as Phase 1)
+  # AdamW betas for backup optimizer (fixed for Phase 1)
   optimizer_params.args.adamw_betas:
     value: [0.9, 0.999]
   
-  # Newton-Schulz method (NOT PolarExpress)
+  # PolarExpress method
   optimizer_params.args.polar_method:
-    value: Keller
+    value: polarexpress
   
-  # Newton-Schulz steps
+  # PolarExpress hyperparameters - THE MAIN SWEEP
+  optimizer_params.args.polar_num_iters:
+    values: 
+      - [3]
+      - [3, 0]
+      - [5]
+      - [5, 0]
+      - [5, 3]
+      - [7]
+      - [7, 0]
+      - [7, 5]
+      - [7, 3]
+  
+  optimizer_params.args.polar_safety:
+    values: [1.01]
+  
+  optimizer_params.args.polar_cushion:
+    values: [0.01, 0.024, 0.05]
+  
+  # Newton-Schulz steps (Muon parameter)
   optimizer_params.args.ns_steps:
     value: 5
   
-  # Random seeds for reproducibility (3 seeds)
+  # Stage 1: single seed and half epoch for fast ranking
   seed:
-    values: [42, 123, 456]
+    values: [42]
   
-  # Training parameters (1 epoch = ~1680 steps)
   training_data.training_params.num_epochs:
-    value: 1
+    value: 0.5
   
   training_data.training_params.tokens_processed:
     value: 524288
   
-  # Logging (same as Phase 0/1)
-  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps
+  # Logging (same as Phase 1)
   logging_params.log_step:
     value: 160
   
@@ -78,8 +95,7 @@ parameters:
     value: "cs182-polar-express"
   
   logging_params.wandb.tags:
-    value: ["test", "newton-schulz", "baseline"]
+    value: ["phase1", "stage1", "pe-hyperparams", "safety1.01"]
 
-# This creates: 3 seeds = 3 runs
-# Purpose: Baseline comparison with Newton-Schulz (Keller method) vs PolarExpress
-#
+# Stage 1 (safety=1.01): 9 num_iters × 1 safety × 3 cushion × 1 seed = 27 runs
+# Each run ~0.5 epoch for fast hyperparameter ranking
