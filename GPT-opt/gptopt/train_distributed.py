@@ -506,6 +506,17 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         wandb_diag_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])
                     if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
                         wandb_diag_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
+                        wandb_diag_dict["pe/avg_time_ms"] = np.mean(optimizer._pe_times)
+                    
+                    # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
+                    if hasattr(optimizer, '_pe_ortho_errs_before_per_layer'):
+                        for layer_key, errs in optimizer._pe_ortho_errs_before_per_layer.items():
+                            if len(errs) > 0:
+                                wandb_diag_dict[f"ortho_err_before/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
+                    if hasattr(optimizer, '_pe_ortho_errs_after_per_layer'):
+                        for layer_key, errs in optimizer._pe_ortho_errs_after_per_layer.items():
+                            if len(errs) > 0:
+                                wandb_diag_dict[f"ortho_err_after/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
                     
                     # Attention health and weight scales (compute_svd=False to skip expensive SVD)
                     try:

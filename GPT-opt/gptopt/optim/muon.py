@@ -377,8 +377,25 @@ class Muon(torch.optim.Optimizer):
                                     self._pe_ortho_errs_before = []
                                     self._pe_ortho_errs_after = []
                                     self._pe_times = []
+                                    # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
+                                    self._pe_ortho_errs_before_per_layer = {}
+                                    self._pe_ortho_errs_after_per_layer = {}
                                 self._pe_ortho_errs_before.append(ortho_err_before)
                                 self._pe_ortho_errs_after.append(ortho_err_after)
+                                
+                                # Track per-layer ortho errors for stacked QKV in layers 0, 5, 11
+                                param_name = state.get("param_name", "")
+                                if self.muon_mode == "stacked_qkv" and "attn.c_attn.weight" in param_name:
+                                    # Extract layer number from param name (e.g., "h.0.attn.c_attn.weight" -> 0)
+                                    for target_layer in [0, 5, 11]:
+                                        if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                                            layer_key = f"layer{target_layer}"
+                                            if layer_key not in self._pe_ortho_errs_before_per_layer:
+                                                self._pe_ortho_errs_before_per_layer[layer_key] = []
+                                                self._pe_ortho_errs_after_per_layer[layer_key] = []
+                                            self._pe_ortho_errs_before_per_layer[layer_key].append(ortho_err_before)
+                                            self._pe_ortho_errs_after_per_layer[layer_key].append(ortho_err_after)
+                                            break
                         else:
                             u = result if not isinstance(result, tuple) else result[0]
                     except Exception as e:

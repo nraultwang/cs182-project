@@ -8,18 +8,20 @@ This document describes all metrics logged during training, organized by categor
 - `log_step`: Frequency for end-to-end metrics (in micro-steps, default: 160 = every 10 optimizer steps)
 - `diag_log_step`: Frequency for diagnostics: PE, attention health, weight scales (in micro-steps, default: 160 = every 10 optimizer steps)
 - `svd_log_step`: Frequency for expensive SVD/orthogonality metrics (in micro-steps, default: 800 = every 50 optimizer steps)
-- `val_step`: Frequency for validation (in micro-steps, default: 3200 = every 200 optimizer steps)
+- `val_step`: Frequency for validation (in micro-steps, default: 160 = every 10 optimizer steps)
 
 **Current Sweep Frequencies:**
-- **Phase 0** (0.2 epochs, 381 steps): 
-  - log_step=160 → ~38 end-to-end log points
-  - diag_log_step=160 → ~38 diagnostic events
-  - svd_log_step=800 → 0 SVD events (too short)
+- **Phase 0** (0.2 epochs, ~336 optimizer steps = 5,376 micro-steps): 
+  - log_step=160 → ~33 end-to-end log points
+  - diag_log_step=160 → ~33 diagnostic events
+  - svd_log_step=800 → ~6 SVD events
+  - val_step=8000 → 0 validation points (too infrequent for 0.2 epochs)
   
-- **Phase 1** (1.0 epoch, 1,907 steps):
-  - log_step=160 → ~191 end-to-end log points
-  - diag_log_step=160 → ~191 diagnostic events
-  - svd_log_step=800 → ~38 SVD events
+- **Phase 1** (1.0 epoch, ~1,680 optimizer steps = 26,880 micro-steps):
+  - log_step=160 → ~168 end-to-end log points
+  - diag_log_step=160 → ~168 diagnostic events
+  - svd_log_step=800 → ~33 SVD events
+  - val_step=160 → ~168 validation points
 
 ## Quick Summary
 
@@ -82,23 +84,31 @@ This document describes all metrics logged during training, organized by categor
 
 | Metric | Description | Good Range | Alerts |
 |--------|-------------|------------|---------|
-| `pe/ortho_err_before` | ‖G^T G - I‖_F on input gradient (before PE) | 1-100 | N/A (input varies) |
-| `pe/ortho_err_after` | ‖U^T U - I‖_F on output (after PE) | < 0.1 | > 0.5 (not orthogonalizing) |
-| `pe/time_ms` | Direct cost of PE substep | < 10ms | > 50ms (bottleneck) |
+| `pe/ortho_err_before` | ‖G^T G - I‖_F on input gradient (before PE, averaged) | 1-100 | N/A (input varies) |
+| `pe/ortho_err_after` | ‖U^T U - I‖_F on output (after PE, averaged) | < 0.1 | > 0.5 (not orthogonalizing) |
+| `pe/time_ms` | Direct cost of PE substep (last 10 steps) | < 10ms | > 50ms (bottleneck) |
+| `pe/avg_time_ms` | Average PE time across entire training | < 10ms | > 50ms (bottleneck) |
+| `ortho_err_before/layer{0,5,11}_stacked_qkv` | Per-layer ortho error before PE (stacked QKV) | 1-100 | N/A |
+| `ortho_err_after/layer{0,5,11}_stacked_qkv` | Per-layer ortho error after PE (stacked QKV) | < 0.1 | > 0.5 |
 
 **PE Quality Check:**
-- `pe/ortho_err_before` measures input gradient orthogonality (baseline, varies widely)
+- `pe/ortho_err_before` measures input gradient orthogonality (averaged across all layers)
   - Computed on normalized gradient before any PE iterations
-- `pe/ortho_err_after` measures how orthogonal the output U is (exact, not cached)
+- `pe/ortho_err_after` measures how orthogonal the output U is (averaged across all layers)
   - Small values (< 0.1) = good orthogonalization
   - Large values (> 0.5) = PE failing, may need different coefficients
   - Recomputed after final iteration for accuracy (~100ms overhead every 100 steps)
+- **Per-layer tracking**: `ortho_err_{before,after}/layer{0,5,11}_stacked_qkv`
+  - Tracks ortho errors for sentinel layers (first, middle, last)
+  - Enables depth-dependent PE quality analysis
+  - Only logged for stacked QKV mode (most common)
 - **Gap analysis**: `ortho_err_before - ortho_err_after` shows PE improvement
   - Large gap = PE doing useful work
   - Small gap = gradient already orthogonal (PE unnecessary?)
-- `pe/time_ms` tracks computational cost per update (includes both matmuls when logging)
+- `pe/time_ms` tracks computational cost per update (last 10 steps)
+- `pe/avg_time_ms` tracks average PE time across entire training run
 
-**Note:** Only logged when using `muon-polarexpress` optimizer. Supports `num_iters=0` (normalization only).
+**Note:** Only logged when using Muon with `polar_method=polarexpress`. Per-layer metrics only for `muon_mode=stacked_qkv`.
 **Overhead:** ~200ms every 100 steps for both before/after matmuls (0.02% of training time).
 
 ## C) Multi-Layer Attention Health (Every 10 Steps via `diag_log_step`)

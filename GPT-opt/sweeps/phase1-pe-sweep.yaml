@@ -27,12 +27,16 @@ parameters:
   optimizer_params.name:
     value: muon
   
-  # Learning rate (fixed for Phase 1) - Muon paper standard
+  # Learning rate (fixed for Phase 1)
   optimizer_params.args.lr:
-    value: 0.02
+    value: 0.01
   
   optimizer_params.args.weight_decay:
-    value: 0.1
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (fixed for Phase 1)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
   
   # PolarExpress method
   optimizer_params.args.polar_method:
@@ -60,8 +64,12 @@ parameters:
     values: [0.01, 0.024, 0.05]
   
   # Newton-Schulz steps (Muon parameter)
-  +optimizer_params.args.ns_steps:
+  optimizer_params.args.ns_steps:
     value: 5
+  
+  # Random seeds for reproducibility (3 seeds for statistical significance)
+  seed:
+    values: [42, 123, 456]
   
   # Training parameters (1 epoch = ~1907 steps = ~5 hours on A6000)
   training_data.training_params.num_epochs:
@@ -79,7 +87,7 @@ parameters:
     value: 160
   
   logging_params.val_step:
-    value: 3200
+    value: 160
   
   logging_params.svd_log_step:
     value: 800
@@ -93,7 +101,7 @@ parameters:
   logging_params.wandb.tags:
     value: ["phase1", "sensitivity", "pe-hyperparams", "frequency-sweep"]
 
-# This creates: 9 num_iters patterns × 2 safety × 3 cushion = 54 runs
+# This creates: 9 num_iters patterns × 2 safety × 3 cushion × 3 seeds = 162 runs
 # Total time: ~270 hours on A6000 (~11 days)
 # 
 # Research questions:
