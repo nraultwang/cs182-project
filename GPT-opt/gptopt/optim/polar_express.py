@@ -92,7 +92,7 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     for key in keys:
         if key not in COEFFS_LIBRARY:
             # Try alternative formatting in case of rounding
-            available_keys = [k for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iter}_s{s_str}_") for num_iter in num_iters]
+            available_keys = [k for num_iter in num_iters for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iter}_s{s_str}_")]
             warnings.warn(
                 f"Coefficient config '{key}' not found in library. "
                 f"Available configs for n={num_iters}, s={s_str}: {available_keys}. "
