@@ -1,0 +1,114 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase1-pe-stage2"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer base
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (fixed for Phase 1)
+  optimizer_params.args.lr:
+    value: 0.01
+  
+  optimizer_params.args.weight_decay:
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (fixed for Phase 1)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+  
+  # PolarExpress method
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  # TODO: After Stage 1 completes, fill in the top ~10 num_iters patterns below
+  # Example patterns (replace with actual top performers from Stage 1):
+  # - [3], [3,0], [5], [5,0], [5,3], [7], [7,0], [7,5], [7,3]
+  optimizer_params.args.polar_num_iters:
+    values: 
+      - [5]        # PLACEHOLDER - replace with actual top 10 from Stage 1
+      - [5, 0]     # PLACEHOLDER
+      - [5, 3]     # PLACEHOLDER
+      - [7]        # PLACEHOLDER
+      - [7, 5]     # PLACEHOLDER
+      - [7, 3]     # PLACEHOLDER
+      - [3]        # PLACEHOLDER
+      - [3, 0]     # PLACEHOLDER
+      - [7, 0]     # PLACEHOLDER
+      # Add 10th pattern here if needed
+  
+  # TODO: Set to the BEST safety value from Stage 1 (either 1.00 or 1.01)
+  optimizer_params.args.polar_safety:
+    value: 1.01    # PLACEHOLDER - replace with best from Stage 1
+  
+  # TODO: Set to the BEST cushion value from Stage 1 (0.01, 0.024, or 0.05)
+  optimizer_params.args.polar_cushion:
+    value: 0.024   # PLACEHOLDER - replace with best from Stage 1
+  
+  # Newton-Schulz steps (Muon parameter)
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Stage 2: All 3 seeds for statistical significance on final configs
+  seed:
+    values: [42, 123, 456]
+  
+  # Full 1 epoch training for final evaluation
+  training_data.training_params.num_epochs:
+    value: 1
+  
+  training_data.training_params.tokens_processed:
+    value: 524288
+  
+  # Logging (same as Phase 1)
+  logging_params.log_step:
+    value: 160
+  
+  logging_params.diag_log_step:
+    value: 160
+  
+  logging_params.val_step:
+    value: 160
+  
+  logging_params.svd_log_step:
+    value: 800
+  
+  logging_params.save_ckpt_step:
+    value: 3200
+  
+  logging_params.wandb.project:
+    value: "cs182-polar-express"
+  
+  logging_params.wandb.tags:
+    value: ["phase1", "stage2", "pe-hyperparams", "finalists"]
+
+# Stage 2: ~10 num_iters patterns × 1 safety × 1 cushion × 3 seeds = ~30 runs
+# 
+# Instructions for use:
+# 1. After Stage 1 completes, analyze results in W&B
+# 2. Identify best polar_safety value (1.00 or 1.01)
+# 3. Identify best polar_cushion value (0.01, 0.024, or 0.05)
+# 4. Rank the 9 num_iters patterns and pick top ~10 (or fewer if clear winners)
+# 5. Update the three TODO sections above with actual values
+# 6. Run: wandb sweep sweeps/phase1-pe-stage2-template.yaml
