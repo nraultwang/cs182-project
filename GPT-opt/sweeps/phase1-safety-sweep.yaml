@@ -14,7 +14,7 @@ command:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "phase1-pe-stage2"
+    value: "phase1-safety-sweep"
   
   # Dataset and model
   training_data:
@@ -42,36 +42,24 @@ parameters:
   optimizer_params.args.polar_method:
     value: polarexpress
   
-  # Stage 2: Sweep all num_iters patterns (no filtering needed)
+  # Stage 1: Fix standard PE params, sweep safety only
   optimizer_params.args.polar_num_iters:
-    values: 
-      - [3]      # 3 iterations always
-      - [3, 0]   # Cycle: 3 then skip (50% cost reduction)
-      - [5]      # 5 iterations always
-      - [5, 0]   # Cycle: 5 then skip (50% cost reduction)
-      - [5, 3]   # Cycle: 5 then 3 (~20% cost reduction)
-      - [7]      # 7 iterations always
-      - [7, 0]   # Cycle: 7 then skip (50% cost reduction)
-      - [7, 5]   # Cycle: 7 then 5 (~15% cost reduction)
-      - [7, 3]   # Cycle: 7 then 3 (~30% cost reduction)
+    value: [5]  # Standard 5 iterations
   
-  # TODO: Set to the BEST safety value from Stage 1 (either 1.00 or 1.01)
   optimizer_params.args.polar_safety:
-    value: 1.01    # PLACEHOLDER - replace with best from Stage 1
+    values: [1.00, 1.01]  # THE MAIN SWEEP: Find best safety factor
   
-  # Stage 2: Sweep all cushion values
   optimizer_params.args.polar_cushion:
-    values: [0.01, 0.024, 0.05]
+    value: 0.024  # Paper's magic cushion value
   
   # Newton-Schulz steps (Muon parameter)
   optimizer_params.args.ns_steps:
     value: 5
   
-  # Stage 2: All 3 seeds for statistical significance on final configs
+  # Full statistical evaluation: 3 seeds, 1 epoch
   seed:
     values: [42, 123, 456]
   
-  # Full 1 epoch training for final evaluation
   training_data.training_params.num_epochs:
     value: 1
   
@@ -98,17 +86,12 @@ parameters:
     value: "cs182-polar-express"
   
   logging_params.wandb.tags:
-    value: ["phase1", "stage2", "pe-hyperparams", "finalists"]
+    value: ["phase1", "stage1", "safety-sweep"]
 
-# Phase 1 Stage 2: 9 num_iters × 3 cushions × 1 safety × 3 seeds = 81 runs
-# Purpose: Full sweep of {num_iters, cushion} at the best safety factor
+# Phase 1 Stage 1: 2 safety × 3 seeds × 1 epoch = 6 runs
+# Purpose: Identify best safety factor with strong statistical evidence
 # 
 # Each run: ~2.7 hours (1 epoch on A6000)
-# Total time with 2 GPUs: ~109 hours (~4.5 days)
+# Total time with 2 GPUs: ~8 hours (3 runs per GPU)
 # 
-# Instructions for use:
-# 1. After Stage 1 completes, analyze results in W&B
-# 2. Identify best polar_safety value (1.00 or 1.01) by comparing val/loss
-# 3. Update line 60 above with the best safety value
-# 4. Run: wandb sweep sweeps/phase1-pe-stage2-template.yaml
-# 5. Launch agents: CUDA_VISIBLE_DEVICES=0,1 ./run_sweep.sh <SWEEP_ID>
+# After completion, analyze val/loss by safety factor and select best for Stage 2
