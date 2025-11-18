@@ -1,3 +1,25 @@
+# analyze_pe_from_ckpts.py
+# Offline Polar Express SVD analysis with a single W&B table that shows
+# how the SAME update evolves across PE iterations (iter curves on one plot).
+#
+# Usage:
+#   python analyze_pe_from_ckpts.py \
+#       --ckpt_glob "outputs/phase1/*/ckpt*.pth" \
+#       --project your-wandb-project \
+#       --run_name pe-offline-analysis \
+#       --entity your-wandb-entity \
+#       --device cuda
+#
+# In W&B:
+#   - Add a Line Plot with source = pe_offline/iter_curves
+#   - X = iter, Y = value, Group = ckpt_step
+#   - Filter layer == 11 (or 0/5), part == stacked_qkv, metric == condition_number
+#
+# Notes:
+#   • This script operates on the optimizer state (momentum/exp_avg) stored in checkpoints.
+#   • It reconstructs the matrix update, runs PE iterations OFFLINE, and logs SVD metrics
+#     per iteration as both (a) scalar summaries and (b) a single consolidated W&B Table.
+
 import argparse
 import glob
 import os
@@ -9,9 +31,11 @@ import wandb
 from gptopt.optim.polar_express import get_coeffs_for_config
 
 
+# --------------------------- SVD helpers ---------------------------
+
 @torch.no_grad()
 def compute_svd_metrics(matrix: torch.Tensor, prefix: str) -> Dict[str, float]:
-    """Return basic SVD metrics for a 2D tensor."""
+    """Return basic SVD metrics for a 2D tensor, names prefixed for scalar logging."""
     try:
         U, S, Vh = torch.linalg.svd(matrix, full_matrices=False)
     except RuntimeError:
@@ -37,52 +61,117 @@ def compute_svd_metrics(matrix: torch.Tensor, prefix: str) -> Dict[str, float]:
 
 
 @torch.no_grad()
+def svd_vals(matrix: torch.Tensor) -> Dict[str, float]:
+    """Return *unprefixed* SVD metrics (used for table rows)."""
+    try:
+        S = torch.linalg.svdvals(matrix)
+    except RuntimeError:
+        S = torch.linalg.svdvals(matrix.cpu()).to(matrix.device)
+
+    sigma_max = S[0].item()
+    sigma_min = S[-1].item()
+    cond = sigma_max / (sigma_min + 1e-10)
+    eff_rank = (S.sum() / (sigma_max + 1e-10)).item()
+
+    out = {
+        "sigma_max": sigma_max,
+        "sigma_min": sigma_min,
+        "condition_number": cond,
+        "effective_rank": eff_rank,
+    }
+    if S.numel() > 1:
+        out["spectral_gap"] = (S[0] / S[1]).item()
+    return out
+
+
+# --------------------------- PE iteration (offline) ---------------------------
+
+@torch.no_grad()
 def run_pe_iterations(G: torch.Tensor, coeffs_list: List[torch.Tensor]) -> List[torch.Tensor]:
-    """Re-implement PolarExpress iteration to expose per-iteration states.
+    """Run Polar Express iterations offline and return intermediate states X_k.
 
-    This mirrors gptopt.optim.polar_express.PolarExpress but returns a list of
-    intermediate matrices after each iteration (including the normalized
-    "iteration 0" state). This is for offline analysis only.
+    We mirror the left-orthogonalizing PE update:
+        X_{k+1} = (a_k I + b_k (X_k X_k^T) + c_k (X_k X_k^T)^2) X_k
+    We normalize X_0 similarly to the training code and emit [X_0, X_1, ..., X_T].
+
+    Args:
+        G: 2D tensor (the raw step/update you want to analyze). If >2D, flatten first.
+        coeffs_list: list of (a, b, c) for each PE iteration.
+
+    Returns:
+        List[Tensor]: states after each iteration, all in float32 and original orientation.
     """
-    assert G.ndim >= 2
+    assert G.ndim == 2, "run_pe_iterations expects a 2D matrix"
 
-    # Cast and normalize as in PolarExpress
-    X = G.bfloat16()
-    transposed = G.size(-2) > G.size(-1)
+    # Follow training behavior: work in bf16 for matmuls, then convert back for SVD.
+    X = G.to(dtype=torch.bfloat16)
+
+    # Ensure we left-orthogonalize; if rows > cols, transpose to favor row Gram shape
+    transposed = X.size(-2) > X.size(-1)
     if transposed:
-        X = X.mT
+        X = X.mT  # now rows <= cols
+
+    # Normalize Frobenius energy (include small safety like in training)
     X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.01 + 1e-7)
 
-    states: List[torch.Tensor] = [X.clone()]  # iter 0 (normalized input)
+    states: List[torch.Tensor] = [X.clone()]
 
-    for a, b, c in coeffs_list:
+    eye_cache = None
+    for (a, b, c) in coeffs_list:
+        # Build Gram and polynomial
         A = X @ X.mT
-        B = b * A + c * A @ A
-        X = a * X + B @ X
+        if eye_cache is None or eye_cache.size(0) != A.size(0):
+            eye_cache = torch.eye(A.size(0), device=A.device, dtype=A.dtype)
+        # (a I + b A + c A^2) X
+        B = (b * A) + (c * (A @ A))
+        X = (a * eye_cache + B) @ X
         states.append(X.clone())
 
-    # Match output orientation with original G
+    # Return to original orientation and dtype for SVD stability
     if transposed:
         states = [s.mT for s in states]
-    # Convert back to float32 for SVD stability
     states = [s.to(dtype=torch.float32) for s in states]
     return states
 
 
-def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
+# --------------------------- W&B table utilities ---------------------------
+
+def make_series_table() -> "wandb.sdk.data_types.table.Table":
+    """Create a single table that collects all (ckpt, layer, part, iter) SVD points."""
+    return wandb.Table(columns=["ckpt_step", "layer", "part", "metric", "iter", "value"])
+
+
+def add_series_rows(
+    table: "wandb.sdk.data_types.table.Table",
+    ckpt_step: int,
+    layer_id: int,
+    part: str,
+    iter_idx: int,
+    metrics: Dict[str, float],
+) -> None:
+    """Append rows for each metric into the consolidated table."""
+    for metric_name, val in metrics.items():
+        table.add_data(ckpt_step, layer_id, part, metric_name, iter_idx, float(val))
+
+
+# --------------------------- Main analysis per checkpoint ---------------------------
+
+@torch.no_grad()
+def analyze_checkpoint(
+    path: str,
+    device: str,
+    series_table: "wandb.sdk.data_types.table.Table",
+) -> Dict[str, Any]:
     """Load a checkpoint and compute offline PE SVD metrics for layers 0,5,11.
 
-    This operates **purely on the optimizer state_dict** using metadata stored by Muon:
-    - state[pid]['param_name']
-    - state[pid]['is_W_QKV']
-    - state[pid]['use_muon']
-    - state[pid]['momentum_buffer']
+    Operates on optimizer_state_dict (no live optimizer reconstruction).
+    Expects Muon to store:
+      state[pid]['param_name'], state[pid]['is_W_QKV'], state[pid]['use_muon'],
+      state[pid]['momentum_buffer'] (or equivalent update tensor).
 
-    It does **not** reconstruct a live optimizer; instead it pulls the momentum buffers
-    and re-applies PolarExpress offline, logging:
-    - SVD of the raw stacked update (before normalization)
-    - Per-iteration SVD of the normalized update as PolarExpress runs
-      (stacked QKV and split Q/K/V when applicable)
+    Logs:
+      • Raw stacked update SVD (scalar metrics)
+      • Per-iteration SVD for stacked QKV and split Q/K/V into a single W&B table
     """
     ckpt = torch.load(path, map_location=device)
     step = ckpt.get("step", None)
@@ -91,26 +180,27 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
     state = opt_state["state"]
     param_groups = opt_state["param_groups"]
 
-    # Map param id -> param_group dict
+    # Map param id -> its optimizer param_group dict
     group_for_param: Dict[int, Dict[str, Any]] = {}
     for group in param_groups:
         for pid in group["params"]:
             group_for_param[pid] = group
 
     target_layers = [0, 5, 11]
-    metrics: Dict[str, float] = {}
+    scalars: Dict[str, float] = {}
 
     for pid, s in state.items():
         if not s.get("use_muon", False):
             continue
         if not s.get("is_W_QKV", False):
             continue
+
         name = s.get("param_name", "")
         buf = s.get("momentum_buffer", None)
         if buf is None:
             continue
 
-        # Identify which layer this is
+        # Identify attention layer index
         layer_id = None
         for L in target_layers:
             if f"h.{L}.attn.c_attn.weight" in name:
@@ -120,26 +210,25 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
             continue
 
         group = group_for_param.get(pid, {})
-        ns_steps = group.get("ns_steps", 5)
-        polar_method = group.get("polar_method", "polarexpress")
+        polar_method   = group.get("polar_method", "polarexpress")
         polar_num_iters = group.get("polar_num_iters", None)
-        polar_safety = group.get("polar_safety", 1.01)
-        polar_cushion = group.get("polar_cushion", 0.024)
+        polar_safety   = group.get("polar_safety", 1.01)
+        polar_cushion  = group.get("polar_cushion", 0.024)
 
         if polar_method != "polarexpress":
-            # Only analyze PE runs in this script.
+            # analyze PE runs only
             continue
 
-        # Move buffer to device and flatten to 2D if needed
+        # Prepare update matrix G on device (2D)
         G = buf.to(device)
         if G.ndim > 2:
             G = G.view(G.size(0), -1)
 
-        # 1) SVD of raw stacked update (before normalization)
+        # (1) Raw stacked update SVD (scalar logs)
         raw_prefix = f"pe_offline/layer{layer_id}_stacked_qkv/raw"
-        metrics.update(compute_svd_metrics(G, raw_prefix))
+        scalars.update(compute_svd_metrics(G, raw_prefix))
 
-        # 2) Build PolarExpress coefficients for this configuration
+        # (2) PE coefficients for this configuration
         coeffs_lists = get_coeffs_for_config(
             num_iters=polar_num_iters,
             safety=polar_safety,
@@ -147,44 +236,42 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
         )
         coeffs = coeffs_lists[0]
 
-        # 3) Run PE iterations and log per-iteration SVD (stacked + split Q/K/V)
+        # (3) Run PE iterations offline and append to the unified table
         states = run_pe_iterations(G, coeffs)
+        ckpt_step = int(ckpt.get("step", -1))
 
         for iter_idx, X in enumerate(states):
-            base = f"pe_offline/layer{layer_id}/iter{iter_idx}"
-
             # Stacked QKV
-            metrics.update(compute_svd_metrics(X, f"{base}/stacked_qkv"))
+            add_series_rows(series_table, ckpt_step, layer_id, "stacked_qkv", iter_idx, svd_vals(X))
 
-            # Split Q, K, V when in standard stacked shape (e.g., 2304x768)
+            # Split Q/K/V (common GPT-2 shape: rows divisible by 3)
             if X.ndim == 2 and X.size(0) % 3 == 0:
                 rows = X.size(0) // 3
-                Q = X[0:rows, :]
-                K = X[rows:2*rows, :]
-                V = X[2*rows:3*rows, :]
-                metrics.update(compute_svd_metrics(Q, f"{base}/q"))
-                metrics.update(compute_svd_metrics(K, f"{base}/k"))
-                metrics.update(compute_svd_metrics(V, f"{base}/v"))
+                Q, K, V = X[0:rows, :], X[rows:2*rows, :], X[2*rows:3*rows, :]
+                add_series_rows(series_table, ckpt_step, layer_id, "q", iter_idx, svd_vals(Q))
+                add_series_rows(series_table, ckpt_step, layer_id, "k", iter_idx, svd_vals(K))
+                add_series_rows(series_table, ckpt_step, layer_id, "v", iter_idx, svd_vals(V))
 
     if step is not None:
-        metrics["pe_offline/ckpt_step"] = float(step)
-    metrics["pe_offline/ckpt_path"] = os.path.basename(path)
-    return metrics
+        scalars["pe_offline/ckpt_step"] = float(step)
+    scalars["pe_offline/ckpt_path"] = os.path.basename(path)
+    return scalars
 
+
+# --------------------------- CLI ---------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Offline PolarExpress SVD analysis from checkpoints")
     parser.add_argument("--ckpt_glob", type=str, required=True,
                         help="Glob for checkpoint files, e.g. 'outputs/phase1/*/ckpt*.pth'")
     parser.add_argument("--project", type=str, required=True,
-                        help="wandb project name")
+                        help="Weights & Biases project name")
     parser.add_argument("--run_name", type=str, default="pe-offline-analysis",
-                        help="wandb run name")
+                        help="W&B run name")
     parser.add_argument("--entity", type=str, default=None,
-                        help="wandb entity (optional)")
+                        help="W&B entity (optional)")
     parser.add_argument("--device", type=str, default="cuda",
                         help="Device to run analysis on (cuda or cpu)")
-
     args = parser.parse_args()
 
     ckpt_paths = sorted(glob.glob(args.ckpt_glob))
@@ -194,13 +281,17 @@ def main():
     wandb.init(project=args.project, entity=args.entity, name=args.run_name,
                config={"ckpt_glob": args.ckpt_glob})
 
-    for idx, path in enumerate(ckpt_paths):
-        metrics = analyze_checkpoint(path, device=args.device)
-        # Use checkpoint step as x-axis if present, otherwise index
-        step = metrics.get("pe_offline/ckpt_step", idx)
-        wandb.log(metrics, step=int(step))
-        print(f"Analyzed {path}")
+    # Single consolidated table for all checkpoints
+    series_table = make_series_table()
 
+    for idx, path in enumerate(ckpt_paths):
+        scalars = analyze_checkpoint(path, device=args.device, series_table=series_table)
+        step = int(scalars.get("pe_offline/ckpt_step", idx))
+        wandb.log(scalars, step=step)
+        print(f"[analyze_pe_from_ckpts] Analyzed {path}")
+
+    # Log the table once at the end so you can build one graph across ckpts
+    wandb.log({"pe_offline/iter_curves": series_table})
     wandb.finish()
 
 
