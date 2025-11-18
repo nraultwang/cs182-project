@@ -505,8 +505,8 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
                         wandb_diag_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])
                     if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
+                        # pe/time_ms reflects the average PE iteration time over the most recent window
                         wandb_diag_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
-                        wandb_diag_dict["pe/avg_time_ms"] = np.mean(optimizer._pe_times)
                     
                     # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
                     if hasattr(optimizer, '_pe_ortho_errs_before_per_layer'):

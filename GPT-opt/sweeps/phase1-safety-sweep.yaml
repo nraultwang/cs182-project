@@ -83,7 +83,7 @@ parameters:
     value: 3200
   
   logging_params.wandb.project:
-    value: "cs182-polar-express"
+    value: "cs182-project-GPT-opt"
   
   logging_params.wandb.tags:
     value: ["phase1", "stage1", "safety-sweep"]
