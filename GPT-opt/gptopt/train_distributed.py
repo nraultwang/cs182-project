@@ -5,6 +5,7 @@ import torch.distributed as dist
 from gptopt.utils import get_worker_info, save_checkpoint, load_checkpoint
 import json
 import numpy as np
+import wandb
 
 typedict = {"float16":torch.float16, "float32":torch.float32, "bfloat16":torch.bfloat16}
 
@@ -43,23 +44,14 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                 ('h.11.attn.c_attn.weight', 'layer11'), # Last layer attention
             ]
             
-            # Helper function to compute SVD metrics
-            def compute_svd_metrics(matrix, prefix):
-                """Compute SVD metrics for a matrix and store with given prefix."""
-                U, S, Vh = torch.linalg.svd(matrix, full_matrices=False)
-                
-                sigma_max = S[0].item()
-                sigma_min = S[-1].item()
-                condition_number = sigma_max / (sigma_min + 1e-10)
-                effective_rank = (S.sum() / (sigma_max + 1e-10)).item()
-                
-                metrics[f'{prefix}/sigma_max'] = sigma_max
-                metrics[f'{prefix}/sigma_min'] = sigma_min
-                metrics[f'{prefix}/condition_number'] = condition_number
-                metrics[f'{prefix}/effective_rank'] = effective_rank
-                
-                if len(S) > 1:
-                    metrics[f'{prefix}/spectral_gap'] = (S[0] / S[1]).item()
+            # Helper to log singular value distributions as histograms
+            def log_singular_value_histogram(matrix, prefix):
+                """Compute SVD and store histogram of singular values."""
+                try:
+                    singular_vals = torch.linalg.svdvals(matrix)
+                except RuntimeError:
+                    singular_vals = torch.linalg.svdvals(matrix.cpu()).to(matrix.device)
+                metrics[f'{prefix}/singular_values'] = wandb.Histogram(singular_vals.detach().float().cpu().numpy())
             
             for target_name, layer_label in svd_targets:
                 try:
@@ -79,12 +71,12 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                                 V = W[1536:2304, :]  # Last 768 rows
                                 
                                 # Compute SVD for each projection
-                                compute_svd_metrics(Q, f'svd/{layer_label}_q')
-                                compute_svd_metrics(K, f'svd/{layer_label}_k')
-                                compute_svd_metrics(V, f'svd/{layer_label}_v')
+                                log_singular_value_histogram(Q, f'svd/{layer_label}_q')
+                                log_singular_value_histogram(K, f'svd/{layer_label}_k')
+                                log_singular_value_histogram(V, f'svd/{layer_label}_v')
                             else:
                                 # Fallback: compute on full matrix if not standard QKV shape
-                                compute_svd_metrics(W, f'svd/{layer_label}_qkv')
+                                log_singular_value_histogram(W, f'svd/{layer_label}_qkv')
                             
                             break  # Found the target, move to next
                 except Exception as e:
@@ -126,16 +118,16 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                                                 K_buf = buf[768:1536, :]   # K update
                                                 V_buf = buf[1536:2304, :]  # V update
                                                 
-                                                # Compute SVD for each update projection
-                                                compute_svd_metrics(Q_buf, f'svd/update_{layer_label}_q')
-                                                compute_svd_metrics(K_buf, f'svd/update_{layer_label}_k')
-                                                compute_svd_metrics(V_buf, f'svd/update_{layer_label}_v')
+                                                # Compute singular value histograms for each projection
+                                                log_singular_value_histogram(Q_buf, f'svd/update_{layer_label}_q')
+                                                log_singular_value_histogram(K_buf, f'svd/update_{layer_label}_k')
+                                                log_singular_value_histogram(V_buf, f'svd/update_{layer_label}_v')
                                                 
                                                 # Also compute on full stacked buffer (what PE actually sees)
-                                                compute_svd_metrics(buf, f'svd/update_{layer_label}_stacked')
+                                                log_singular_value_histogram(buf, f'svd/update_{layer_label}_stacked')
                                             else:
                                                 # Fallback: compute on full buffer
-                                                compute_svd_metrics(buf, f'svd/update_{layer_label}')
+                                                log_singular_value_histogram(buf, f'svd/update_{layer_label}')
                                         
                                         break  # Found the target, move to next
                 except Exception as e:
