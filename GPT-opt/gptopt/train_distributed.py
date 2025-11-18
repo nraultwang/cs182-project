@@ -529,13 +529,24 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         wandb_run.log(wandb_diag_dict)
                 
                 # E) SVD-based metrics (at svd_log_step frequency - expensive, keep at 50 steps)
+                # NOTE: We explicitly ignore any PE timings that may occur inside SVD diagnostics,
+                # so that pe/time_ms only reflects the cost of the PE call during the main optimizer step.
                 if master_process and wandb_run is not None and (step % svd_log_step == 0):
+                    # Cache current length of PE timing list (if present)
+                    pe_times_len_before = None
+                    if hasattr(optimizer, "_pe_times") and optimizer._pe_times is not None:
+                        pe_times_len_before = len(optimizer._pe_times)
+
                     try:
                         # Expensive SVD computation
                         advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=True)
                         wandb_run.log(advanced_metrics)
                     except Exception as e:
                         print(f"Warning: Could not compute SVD metrics at step {step}: {e}")
+                    finally:
+                        # Remove any PE timing entries that may have been added during SVD diagnostics
+                        if pe_times_len_before is not None and hasattr(optimizer, "_pe_times") and optimizer._pe_times is not None:
+                            optimizer._pe_times = optimizer._pe_times[:pe_times_len_before]
                 logger.step_times.append(step_time)  # Are these different across ranks?
                 logger.grad_norms.append(norm.item())
                 for param_group in optimizer.param_groups:
