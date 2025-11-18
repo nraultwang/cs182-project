@@ -57,16 +57,16 @@ parameters:
   training_data.training_params.tokens_processed:
     value: 524288
   
-  # Logging (same as Phase 0/1)
-  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps
+  # Logging (reduced frequencies for 1-epoch runs)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
   logging_params.log_step:
     value: 160
   
   logging_params.diag_log_step:
-    value: 160
+    value: 800
   
   logging_params.val_step:
-    value: 160
+    value: 3200
   
   logging_params.svd_log_step:
     value: 800
@@ -75,7 +75,7 @@ parameters:
     value: 3200
   
   logging_params.wandb.project:
-    value: "cs182-polar-express"
+    value: "cs182-project-GPT-opt"
   
   logging_params.wandb.tags:
     value: ["test", "newton-schulz", "baseline"]
