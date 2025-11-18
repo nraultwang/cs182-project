@@ -517,6 +517,12 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         for layer_key, errs in optimizer._pe_ortho_errs_after_per_layer.items():
                             if len(errs) > 0:
                                 wandb_diag_dict[f"ortho_err_after/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
+
+                    # Per-layer post-PE SVD metrics (condition number, sigma_max/min, effective_rank, spectral_gap)
+                    if hasattr(optimizer, '_pe_svd_after_per_layer'):
+                        for layer_key, svd_dict in optimizer._pe_svd_after_per_layer.items():
+                            for metric_name, value in svd_dict.items():
+                                wandb_diag_dict[f"pe_svd_after/{layer_key}/{metric_name}"] = value
                     
                     # Attention health and weight scales (compute_svd=False to skip expensive SVD)
                     try:

@@ -69,7 +69,7 @@ def run_pe_iterations(G: torch.Tensor, coeffs_list: List[torch.Tensor]) -> List[
     return states
 
 
-def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
+def analyze_checkpoint(path: str, device: str = "cuda") -> List[Dict[str, Any]]:
     """Load a checkpoint and compute offline PE SVD metrics for layers 0,5,11.
 
     This operates **purely on the optimizer state_dict** using metadata stored by Muon:
@@ -79,10 +79,11 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
     - state[pid]['momentum_buffer']
 
     It does **not** reconstruct a live optimizer; instead it pulls the momentum buffers
-    and re-applies PolarExpress offline, logging:
-    - SVD of the raw stacked update (before normalization)
-    - Per-iteration SVD of the normalized update as PolarExpress runs
-      (stacked QKV and split Q/K/V when applicable)
+    and re-applies PolarExpress offline.
+
+    Compared to the original version, this function now returns a list of metric
+    dictionaries, one per PolarExpress iteration, so that W&B can plot a single
+    time-series per metric with iteration index as the x-axis.
     """
     ckpt = torch.load(path, map_location=device)
     step = ckpt.get("step", None)
@@ -98,7 +99,9 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
             group_for_param[pid] = group
 
     target_layers = [0, 5, 11]
-    metrics: Dict[str, float] = {}
+
+    # One metrics dict per PE iteration (including iteration 0 normalized input)
+    iter_metrics: List[Dict[str, Any]] = []
 
     for pid, s in state.items():
         if not s.get("use_muon", False):
@@ -135,9 +138,8 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
         if G.ndim > 2:
             G = G.view(G.size(0), -1)
 
-        # 1) SVD of raw stacked update (before normalization)
-        raw_prefix = f"pe_offline/layer{layer_id}_stacked_qkv/raw"
-        metrics.update(compute_svd_metrics(G, raw_prefix))
+        # 1) SVD of raw stacked update (before normalization) -- stored in iter 0
+        raw_metrics = compute_svd_metrics(G, f"pe_offline/layer{layer_id}_stacked_qkv/raw")
 
         # 2) Build PolarExpress coefficients for this configuration
         coeffs_lists = get_coeffs_for_config(
@@ -147,14 +149,19 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
         )
         coeffs = coeffs_lists[0]
 
-        # 3) Run PE iterations and log per-iteration SVD (stacked + split Q/K/V)
+        # 3) Run PE iterations and collect per-iteration SVD (stacked + split Q/K/V)
         states = run_pe_iterations(G, coeffs)
 
         for iter_idx, X in enumerate(states):
-            base = f"pe_offline/layer{layer_id}/iter{iter_idx}"
+            # Ensure we have a metrics dict for this iteration
+            while len(iter_metrics) <= iter_idx:
+                iter_metrics.append({})
 
-            # Stacked QKV
-            metrics.update(compute_svd_metrics(X, f"{base}/stacked_qkv"))
+            base = f"pe_offline/layer{layer_id}"
+
+            # Stacked QKV metrics (no iter suffix; x-axis will be iteration index)
+            stacked_prefix = f"{base}/stacked_qkv"
+            iter_metrics[iter_idx].update(compute_svd_metrics(X, stacked_prefix))
 
             # Split Q, K, V when in standard stacked shape (e.g., 2304x768)
             if X.ndim == 2 and X.size(0) % 3 == 0:
@@ -162,14 +169,21 @@ def analyze_checkpoint(path: str, device: str = "cuda") -> Dict[str, Any]:
                 Q = X[0:rows, :]
                 K = X[rows:2*rows, :]
                 V = X[2*rows:3*rows, :]
-                metrics.update(compute_svd_metrics(Q, f"{base}/q"))
-                metrics.update(compute_svd_metrics(K, f"{base}/k"))
-                metrics.update(compute_svd_metrics(V, f"{base}/v"))
+                iter_metrics[iter_idx].update(compute_svd_metrics(Q, f"{base}/q"))
+                iter_metrics[iter_idx].update(compute_svd_metrics(K, f"{base}/k"))
+                iter_metrics[iter_idx].update(compute_svd_metrics(V, f"{base}/v"))
 
-    if step is not None:
-        metrics["pe_offline/ckpt_step"] = float(step)
-    metrics["pe_offline/ckpt_path"] = os.path.basename(path)
-    return metrics
+            # Attach raw stacked update metrics to iteration 0 for convenience
+            if iter_idx == 0:
+                iter_metrics[0].update(raw_metrics)
+
+    # Attach checkpoint metadata to every iteration's metrics
+    for m in iter_metrics:
+        if step is not None:
+            m["pe_offline/ckpt_step"] = float(step)
+        m["pe_offline/ckpt_path"] = os.path.basename(path)
+
+    return iter_metrics
 
 
 def main():
@@ -195,11 +209,18 @@ def main():
                config={"ckpt_glob": args.ckpt_glob})
 
     for idx, path in enumerate(ckpt_paths):
-        metrics = analyze_checkpoint(path, device=args.device)
-        # Use checkpoint step as x-axis if present, otherwise index
-        step = metrics.get("pe_offline/ckpt_step", idx)
-        wandb.log(metrics, step=int(step))
-        print(f"Analyzed {path}")
+        iter_metrics_list = analyze_checkpoint(path, device=args.device)
+        if not iter_metrics_list:
+            print(f"No matching PE parameters found in checkpoint: {path}")
+            continue
+
+        # Log one W&B step per PE iteration so that each metric becomes
+        # a time series over iterations. The x-axis is the PE iteration index.
+        for iter_idx, metrics in enumerate(iter_metrics_list):
+            metrics["pe_offline/iter"] = iter_idx
+            wandb.log(metrics, step=iter_idx)
+
+        print(f"Analyzed {path} ({len(iter_metrics_list)} PE iterations)")
 
     wandb.finish()
 
