@@ -154,6 +154,24 @@ def add_series_rows(
         table.add_data(ckpt_step, layer_id, part, metric_name, iter_idx, float(val))
 
 
+def add_curve_points(
+    curve_acc,
+    ckpt_step: int,
+    layer_id: int,
+    part: str,
+    iter_idx: int,
+    metrics: Dict[str, float],
+) -> None:
+    """Accumulate per-(layer, part, metric) curves over iterations and checkpoints."""
+    if curve_acc is None:
+        return
+    for metric_name, val in metrics.items():
+        key = (layer_id, part, metric_name)
+        by_ckpt = curve_acc.setdefault(key, {})
+        series = by_ckpt.setdefault(ckpt_step, [])
+        series.append(float(val))
+
+
 # --------------------------- Main analysis per checkpoint ---------------------------
 
 @torch.no_grad()
@@ -161,6 +179,7 @@ def analyze_checkpoint(
     path: str,
     device: str,
     series_table: "wandb.sdk.data_types.table.Table",
+    curve_acc=None,
 ) -> Dict[str, Any]:
     """Load a checkpoint and compute offline PE SVD metrics for layers 0,5,11.
 
@@ -175,6 +194,7 @@ def analyze_checkpoint(
     """
     ckpt = torch.load(path, map_location=device)
     step = ckpt.get("step", None)
+    ckpt_step = int(step) if step is not None else -1
     opt_state = ckpt["optimizer_state_dict"]
 
     state = opt_state["state"]
@@ -236,21 +256,31 @@ def analyze_checkpoint(
         )
         coeffs = coeffs_lists[0]
 
-        # (3) Run PE iterations offline and append to the unified table
+        # (3) Run PE iterations offline and append to the unified table and curve accumulator
         states = run_pe_iterations(G, coeffs)
-        ckpt_step = int(ckpt.get("step", -1))
 
         for iter_idx, X in enumerate(states):
             # Stacked QKV
-            add_series_rows(series_table, ckpt_step, layer_id, "stacked_qkv", iter_idx, svd_vals(X))
+            metrics_stacked = svd_vals(X)
+            add_series_rows(series_table, ckpt_step, layer_id, "stacked_qkv", iter_idx, metrics_stacked)
+            add_curve_points(curve_acc, ckpt_step, layer_id, "stacked_qkv", iter_idx, metrics_stacked)
 
             # Split Q/K/V (common GPT-2 shape: rows divisible by 3)
             if X.ndim == 2 and X.size(0) % 3 == 0:
                 rows = X.size(0) // 3
                 Q, K, V = X[0:rows, :], X[rows:2*rows, :], X[2*rows:3*rows, :]
-                add_series_rows(series_table, ckpt_step, layer_id, "q", iter_idx, svd_vals(Q))
-                add_series_rows(series_table, ckpt_step, layer_id, "k", iter_idx, svd_vals(K))
-                add_series_rows(series_table, ckpt_step, layer_id, "v", iter_idx, svd_vals(V))
+
+                metrics_q = svd_vals(Q)
+                add_series_rows(series_table, ckpt_step, layer_id, "q", iter_idx, metrics_q)
+                add_curve_points(curve_acc, ckpt_step, layer_id, "q", iter_idx, metrics_q)
+
+                metrics_k = svd_vals(K)
+                add_series_rows(series_table, ckpt_step, layer_id, "k", iter_idx, metrics_k)
+                add_curve_points(curve_acc, ckpt_step, layer_id, "k", iter_idx, metrics_k)
+
+                metrics_v = svd_vals(V)
+                add_series_rows(series_table, ckpt_step, layer_id, "v", iter_idx, metrics_v)
+                add_curve_points(curve_acc, ckpt_step, layer_id, "v", iter_idx, metrics_v)
 
     if step is not None:
         scalars["pe_offline/ckpt_step"] = float(step)
@@ -283,15 +313,44 @@ def main():
 
     # Single consolidated table for all checkpoints
     series_table = make_series_table()
+    curve_acc = {}
 
     for idx, path in enumerate(ckpt_paths):
-        scalars = analyze_checkpoint(path, device=args.device, series_table=series_table)
+        scalars = analyze_checkpoint(path, device=args.device, series_table=series_table, curve_acc=curve_acc)
         step = int(scalars.get("pe_offline/ckpt_step", idx))
         wandb.log(scalars, step=step)
         print(f"[analyze_pe_from_ckpts] Analyzed {path}")
 
     # Log the table once at the end so you can build one graph across ckpts
     wandb.log({"pe_offline/iter_curves": series_table})
+
+    # Additionally, log ready-made line_series plots per (layer, part, metric)
+    for (layer_id, part, metric_name), by_ckpt in curve_acc.items():
+        lengths = {len(v) for v in by_ckpt.values()}
+        if len(lengths) != 1:
+            print(
+                f"[analyze_pe_from_ckpts] Skipping plot for layer={layer_id}, part={part}, metric={metric_name} "
+                f"due to unequal series lengths: {lengths}"
+            )
+            continue
+
+        num_points = next(iter(lengths))
+        xs = list(range(num_points))
+        ys = []
+        keys = []
+        for ckpt_step in sorted(by_ckpt.keys()):
+            ys.append(by_ckpt[ckpt_step])
+            keys.append(f"ckpt_{ckpt_step}")
+
+        plot = wandb.plot.line_series(
+            xs=xs,
+            ys=ys,
+            keys=keys,
+            title=f"PE iter curves - layer{layer_id} {part} {metric_name}",
+            xname="pe_iter",
+            yname=metric_name,
+        )
+        wandb.log({f"pe_offline/iter_curve/layer{layer_id}_{part}/{metric_name}": plot})
     wandb.finish()
 
 
