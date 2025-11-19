@@ -67,7 +67,7 @@ parameters:
   
   # Stage 2: Sweep all cushion values
   optimizer_params.args.polar_cushion:
-    values: 0.024
+    value: 0.024
   
   # Newton-Schulz steps (Muon parameter)
   optimizer_params.args.ns_steps:
