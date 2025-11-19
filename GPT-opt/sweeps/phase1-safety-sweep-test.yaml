@@ -1,0 +1,86 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  hydra.job.name:
+    value: "phase1-safety-sweep-test"
+
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+
+  gpt_model:
+    value: gpt-small
+
+  # Optimizer
+  optimizer_params.name:
+    value: muon
+
+  optimizer_params.args.lr:
+    value: 0.01
+
+  optimizer_params.args.weight_decay:
+    value: 0.01
+
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+
+  optimizer_params.args.polar_method:
+    value: polarexpress
+
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+
+  optimizer_params.args.polar_safety:
+    values: [1.00, 1.01]
+
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+
+  optimizer_params.args.ns_steps:
+    value: 5
+
+  # Short validation run: single seed, 0.2 epochs to inspect SVD histograms
+  seed:
+    values: [42]
+
+  training_data.training_params.num_epochs:
+    value: 0.2
+
+  training_data.training_params.tokens_processed:
+    value: 524288
+
+  # Keep default logging cadence so histograms mimic full runs
+  logging_params.log_step:
+    value: 160
+
+  logging_params.diag_log_step:
+    value: 800
+
+  logging_params.val_step:
+    value: 3200
+
+  logging_params.svd_log_step:
+    value: 800
+
+  logging_params.save_ckpt_step:
+    value: 3200
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["phase1", "stage1", "safety-sweep", "svd-test"]
+
+# This sweep launches 2 safety configs × 1 seed × 0.2 epochs (~40 minutes per run)
+# Run a single wandb agent on one GPU to validate the new SVD histogram logging.
