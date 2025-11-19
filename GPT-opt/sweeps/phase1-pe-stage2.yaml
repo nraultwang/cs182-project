@@ -45,11 +45,17 @@ parameters:
   # Stage 2: Sweep all num_iters patterns (no filtering needed)
   optimizer_params.args.polar_num_iters:
     values: 
+      - [2]      # 2 iterations always
       - [3]      # 3 iterations always
       - [3, 0]   # Cycle: 3 then skip (50% cost reduction)
+      - [4]      # 4 iterations always
       - [5]      # 5 iterations always
       - [5, 0]   # Cycle: 5 then skip (50% cost reduction)
+      - [5, 1]   # Cycle: 5 then 1 (40% cost reduction)
+      - [5, 2]   # Cycle: 5 then 2 (30% cost reduction)
       - [5, 3]   # Cycle: 5 then 3 (~20% cost reduction)
+      - [6, 3]   # Cycle: 6 then 3 (~25% cost reduction)
+      - [6]      # Cycle: 6 iterations always
       - [7]      # 7 iterations always
       - [7, 0]   # Cycle: 7 then skip (50% cost reduction)
       - [7, 5]   # Cycle: 7 then 5 (~15% cost reduction)
@@ -61,7 +67,7 @@ parameters:
   
   # Stage 2: Sweep all cushion values
   optimizer_params.args.polar_cushion:
-    values: [0.01, 0.024, 0.05]
+    values: 0.024
   
   # Newton-Schulz steps (Muon parameter)
   optimizer_params.args.ns_steps:
@@ -101,11 +107,11 @@ parameters:
   logging_params.wandb.tags:
     value: ["phase1", "stage2", "pe-hyperparams", "finalists"]
 
-# Phase 1 Stage 2: 9 num_iters × 3 cushions × 1 safety × 3 seeds = 81 runs
+# Phase 1 Stage 2: 15 num_iters × 1 safety × 3 seeds = 45 runs
 # Purpose: Full sweep of {num_iters, cushion} at the best safety factor
 # 
 # Each run: ~3.5 hours (1 epoch on A6000, 8 validation points)
-# Total time with 2 GPUs: ~142 hours (~6 days)
+# Total time with 2 GPUs: ~78 hours (~3.5 days)
 # 
 # Instructions for use:
 # 1. After Stage 1 completes, analyze results in W&B
