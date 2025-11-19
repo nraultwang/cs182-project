@@ -63,13 +63,22 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
         # Use default 8-iteration config
         return [DEFAULT_COEFFS_LIST]
     
-    # Convert single integer to list for consistent handling
     if isinstance(num_iters, int):
-        num_iters = [num_iters]
+        if num_iters == 0:
+            return [[]]
+        num_iters_list = [num_iters]
+    else:
+        num_iters_list = list(num_iters)
     
     if COEFFS_LIBRARY is None:
         warnings.warn("Coefficient library not available, using default coefficients")
-        return DEFAULT_COEFFS_LIST
+        coeffs_lists = []
+        for n in num_iters_list:
+            if n == 0:
+                coeffs_lists.append([])
+            else:
+                coeffs_lists.append(DEFAULT_COEFFS_LIST)
+        return coeffs_lists
     
     # Format cushion to match dictionary key format EXACTLY as in get-coeffs-2.py
     # The library uses the precise value 0.02407327424182761 but keys it as "0.024"
@@ -87,20 +96,27 @@ def get_coeffs_for_config(num_iters=None, safety=1.01, cushion=0.024):
     # Format safety with 2 decimals to match library format
     s_str = f"{safety:.2f}"
     
-    keys = [f"n{num_iter}_s{s_str}_c{c_str}" for num_iter in num_iters]
+    nonzero_nums = [n for n in num_iters_list if n != 0]
+    keys = [f"n{num_iter}_s{s_str}_c{c_str}" for num_iter in nonzero_nums]
     
-    for key in keys:
+    for num_iter, key in zip(nonzero_nums, keys):
         if key not in COEFFS_LIBRARY:
-            # Try alternative formatting in case of rounding
-            available_keys = [k for num_iter in num_iters for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iter}_s{s_str}_")]
+            available_keys = [k for k in COEFFS_LIBRARY.keys() if k.startswith(f"n{num_iter}_s{s_str}_")]
             warnings.warn(
                 f"Coefficient config '{key}' not found in library. "
-                f"Available configs for n={num_iters}, s={s_str}: {available_keys}. "
+                f"Available configs for n={nonzero_nums}, s={s_str}: {available_keys}. "
                 f"Using default coefficients."
             )
             return [DEFAULT_COEFFS_LIST]
     
-    return [COEFFS_LIBRARY[key] for key in keys]
+    coeffs_by_num = {num_iter: COEFFS_LIBRARY[key] for num_iter, key in zip(nonzero_nums, keys)}
+    coeffs_lists = []
+    for n in num_iters_list:
+        if n == 0:
+            coeffs_lists.append([])
+        else:
+            coeffs_lists.append(coeffs_by_num[n])
+    return coeffs_lists
 
 
 @torch.compile

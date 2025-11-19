@@ -45,6 +45,7 @@ parameters:
   # Stage 2: Sweep all num_iters patterns (no filtering needed)
   optimizer_params.args.polar_num_iters:
     values: 
+      - [1]      # 1 iteration always
       - [2]      # 2 iterations always
       - [3]      # 3 iterations always
       - [3, 0]   # Cycle: 3 then skip (50% cost reduction)
