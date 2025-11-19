@@ -360,29 +360,30 @@ def analyze_checkpoint(
             wandb.log({wandb_key: wandb.Image(fig)}, step=ckpt_step)
             plt.close(fig)
 
-        # Log heatmaps for stacked QKV and (if available) Q/K/V using shared binning
+        # Log heatmaps for stacked QKV and (if available) Q/K/V using shared binning.
+        # Keys are prefixed with 'pe_offline_update' to emphasize these are UPDATE spectra.
         log_histogram_heatmap(
             stacked_spectra,
             title_suffix=f"layer{layer_id} stacked_qkv",
-            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_stacked_qkv",
+            wandb_key=f"pe_offline_update/heatmap/ckpt{ckpt_step}/layer{layer_id}_stacked_qkv",
         )
 
         log_histogram_heatmap(
             q_spectra,
             title_suffix=f"layer{layer_id} q",
-            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_q",
+            wandb_key=f"pe_offline_update/heatmap/ckpt{ckpt_step}/layer{layer_id}_q",
         )
 
         log_histogram_heatmap(
             k_spectra,
             title_suffix=f"layer{layer_id} k",
-            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_k",
+            wandb_key=f"pe_offline_update/heatmap/ckpt{ckpt_step}/layer{layer_id}_k",
         )
 
         log_histogram_heatmap(
             v_spectra,
             title_suffix=f"layer{layer_id} v",
-            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_v",
+            wandb_key=f"pe_offline_update/heatmap/ckpt{ckpt_step}/layer{layer_id}_v",
         )
 
     if step is not None:
