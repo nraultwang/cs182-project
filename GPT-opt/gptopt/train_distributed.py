@@ -399,6 +399,37 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
     max_microsteps = max_optimizer_steps * grad_accum_steps
     if master_process: print(f"Training for {num_epochs} epochs = {max_optimizer_steps} optimizer steps = {max_microsteps} micro-steps")
 
+    # Prepare custom checkpoint schedule (fractions of total micro-steps)
+    ckpt_schedule_fracs = logging_params.get('ckpt_schedule', [])
+    scheduled_ckpt_microsteps = []
+    if ckpt_schedule_fracs:
+        try:
+            fracs_sorted = sorted(set(float(f) for f in ckpt_schedule_fracs))
+        except Exception:
+            fracs_sorted = []
+        for frac in fracs_sorted:
+            frac = max(0.0, min(1.0, frac))
+            micro = int(round(frac * max_microsteps))
+            micro = max(1, micro)
+            micro = min(max_microsteps, micro)
+            scheduled_ckpt_microsteps.append(micro)
+
+    saved_ckpt_steps = set()
+
+    def should_save_periodic(step_value: int) -> bool:
+        interval = logging_params.get('save_ckpt_step', 0)
+        return interval and interval > 0 and (step_value % interval == 0)
+
+    def save_ckpt(step_value: int):
+        if ckpt_dir == "" or step_value in saved_ckpt_steps:
+            return
+        save_checkpoint(ckpt_dir, step_value, model, optimizer, loss_accum.item(),
+                        train_dataloader, scheduler, logging_params['keep_last'])
+        if master_process:
+            with open(ckpt_dir + '/log.json', 'w') as file:
+                json.dump(logger.__dict__, file)
+        saved_ckpt_steps.add(step_value)
+
     load_ckpt_step = logging_params['load_ckpt_step']
     if load_ckpt_step != 0:
         model, optimizer, train_dataloader, scheduler = load_checkpoint(ckpt_dir, load_ckpt_step, model, \
@@ -564,13 +595,14 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         })
                     logger.val_losses.append(val_loss.item())
 
-                if (step % logging_params['save_ckpt_step'] == 0) & (ckpt_dir != ""):
-                    save_checkpoint(ckpt_dir, step, model, optimizer, loss_accum.item(),
-                                    train_dataloader, scheduler, logging_params['keep_last'])
-                    
-                    if master_process:
-                        with open(ckpt_dir + '/log.json', 'w') as file:
-                            json.dump(logger.__dict__, file)
+                if ckpt_dir != "":
+                    pending_micro = global_microstep + 1
+                    if should_save_periodic(step):
+                        save_ckpt(step)
+                    while (scheduled_ckpt_microsteps and
+                           pending_micro >= scheduled_ckpt_microsteps[0]):
+                        save_ckpt(step)
+                        scheduled_ckpt_microsteps.pop(0)
                 loss_accum = 0.
                 start_time = time.time()
             
