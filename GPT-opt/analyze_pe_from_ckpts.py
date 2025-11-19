@@ -27,6 +27,7 @@ from typing import Dict, Any, List
 
 import torch
 import wandb
+import matplotlib.pyplot as plt
 
 from gptopt.optim.polar_express import get_coeffs_for_config
 
@@ -61,13 +62,18 @@ def compute_svd_metrics(matrix: torch.Tensor, prefix: str) -> Dict[str, float]:
 
 
 @torch.no_grad()
-def svd_vals(matrix: torch.Tensor) -> Dict[str, float]:
-    """Return *unprefixed* SVD metrics (used for table rows)."""
+def svd_spectrum(matrix: torch.Tensor) -> torch.Tensor:
+    """Return singular values (descending) as a 1D tensor."""
     try:
         S = torch.linalg.svdvals(matrix)
     except RuntimeError:
         S = torch.linalg.svdvals(matrix.cpu()).to(matrix.device)
+    return S
 
+
+@torch.no_grad()
+def svd_vals_from_spectrum(S: torch.Tensor) -> Dict[str, float]:
+    """Return SVD summary metrics given a singular value spectrum."""
     sigma_max = S[0].item()
     sigma_min = S[-1].item()
     cond = sigma_max / (sigma_min + 1e-10)
@@ -82,6 +88,13 @@ def svd_vals(matrix: torch.Tensor) -> Dict[str, float]:
     if S.numel() > 1:
         out["spectral_gap"] = (S[0] / S[1]).item()
     return out
+
+
+@torch.no_grad()
+def svd_vals(matrix: torch.Tensor) -> Dict[str, float]:
+    """Return *unprefixed* SVD metrics (used for table rows)."""
+    S = svd_spectrum(matrix)
+    return svd_vals_from_spectrum(S)
 
 
 # --------------------------- PE iteration (offline) ---------------------------
@@ -150,6 +163,8 @@ def add_series_rows(
     metrics: Dict[str, float],
 ) -> None:
     """Append rows for each metric into the consolidated table."""
+    if table is None:
+        return
     for metric_name, val in metrics.items():
         table.add_data(ckpt_step, layer_id, part, metric_name, iter_idx, float(val))
 
@@ -244,10 +259,6 @@ def analyze_checkpoint(
         if G.ndim > 2:
             G = G.view(G.size(0), -1)
 
-        # (1) Raw stacked update SVD (scalar logs)
-        raw_prefix = f"pe_offline/layer{layer_id}_stacked_qkv/raw"
-        scalars.update(compute_svd_metrics(G, raw_prefix))
-
         # (2) PE coefficients for this configuration
         coeffs_lists = get_coeffs_for_config(
             num_iters=polar_num_iters,
@@ -259,11 +270,17 @@ def analyze_checkpoint(
         # (3) Run PE iterations offline and append to the unified table and curve accumulator
         states = run_pe_iterations(G, coeffs)
 
+        stacked_spectra = []
+        q_spectra = []
+        k_spectra = []
+        v_spectra = []
+
         for iter_idx, X in enumerate(states):
             # Stacked QKV
             metrics_stacked = svd_vals(X)
             add_series_rows(series_table, ckpt_step, layer_id, "stacked_qkv", iter_idx, metrics_stacked)
             add_curve_points(curve_acc, ckpt_step, layer_id, "stacked_qkv", iter_idx, metrics_stacked)
+            stacked_spectra.append(svd_spectrum(X))
 
             # Split Q/K/V (common GPT-2 shape: rows divisible by 3)
             if X.ndim == 2 and X.size(0) % 3 == 0:
@@ -273,14 +290,100 @@ def analyze_checkpoint(
                 metrics_q = svd_vals(Q)
                 add_series_rows(series_table, ckpt_step, layer_id, "q", iter_idx, metrics_q)
                 add_curve_points(curve_acc, ckpt_step, layer_id, "q", iter_idx, metrics_q)
+                q_spectra.append(svd_spectrum(Q))
 
                 metrics_k = svd_vals(K)
                 add_series_rows(series_table, ckpt_step, layer_id, "k", iter_idx, metrics_k)
                 add_curve_points(curve_acc, ckpt_step, layer_id, "k", iter_idx, metrics_k)
+                k_spectra.append(svd_spectrum(K))
 
                 metrics_v = svd_vals(V)
                 add_series_rows(series_table, ckpt_step, layer_id, "v", iter_idx, metrics_v)
                 add_curve_points(curve_acc, ckpt_step, layer_id, "v", iter_idx, metrics_v)
+                v_spectra.append(svd_spectrum(V))
+
+        # Compute shared log10(sigma) bin edges for this checkpoint across all parts
+        all_spectra = stacked_spectra + q_spectra + k_spectra + v_spectra
+        edges = None
+        centers = None
+        if all_spectra:
+            all_logs = []
+            for s in all_spectra:
+                vals = torch.log10(s.cpu().flatten() + 1e-12)
+                all_logs.append(vals)
+            all_logs = torch.cat(all_logs, dim=0)
+            vmin = all_logs.min().item()
+            vmax = all_logs.max().item()
+            if vmin == vmax:
+                vmax = vmin + 1e-3
+
+            num_bins = 50
+            edges = torch.linspace(vmin, vmax, num_bins + 1)
+            centers = 0.5 * (edges[:-1] + edges[1:])
+
+        # Helper: given a list of spectra, build a 2D histogram over log10(sigma)
+        # (x-axis bins) vs PE iteration (y-axis rows), with per-row normalization.
+        def log_histogram_heatmap(spectra_list, title_suffix, wandb_key):
+            if not spectra_list or edges is None or centers is None:
+                return
+
+            spec_t = torch.stack([s.cpu() for s in spectra_list], dim=0)  # [T, num_svs]
+            spec_log = torch.log10(spec_t + 1e-12)
+            T, _ = spec_log.shape
+
+            num_bins = edges.numel() - 1
+            hist = torch.zeros(T, num_bins, dtype=torch.float32)
+            for i in range(T):
+                vals = spec_log[i].flatten()
+                idx = torch.bucketize(vals, edges) - 1
+                idx = idx.clamp(0, num_bins - 1)
+                hist[i].index_add_(0, idx, torch.ones_like(vals, dtype=hist.dtype))
+
+            # Normalize each row so values are in [0,1] and sum to 1 per PE iter
+            row_sums = hist.sum(dim=1, keepdim=True)
+            row_sums = row_sums.clamp_min(1e-12)
+            hist = hist / row_sums
+
+            fig, ax = plt.subplots()
+            im = ax.imshow(
+                hist.numpy().T,
+                aspect="auto",
+                origin="lower",
+                interpolation="nearest",
+                extent=[0, T - 1, centers[0].item(), centers[-1].item()],
+            )
+            ax.set_xlabel("pe_iter")
+            ax.set_ylabel("log10(sigma)")
+            ax.set_title(f"SV density vs PE iter - ckpt{ckpt_step} {title_suffix}")
+            cbar = fig.colorbar(im, ax=ax)
+            cbar.set_label("density (per row)")
+            wandb.log({wandb_key: wandb.Image(fig)}, step=ckpt_step)
+            plt.close(fig)
+
+        # Log heatmaps for stacked QKV and (if available) Q/K/V using shared binning
+        log_histogram_heatmap(
+            stacked_spectra,
+            title_suffix=f"layer{layer_id} stacked_qkv",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_stacked_qkv",
+        )
+
+        log_histogram_heatmap(
+            q_spectra,
+            title_suffix=f"layer{layer_id} q",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_q",
+        )
+
+        log_histogram_heatmap(
+            k_spectra,
+            title_suffix=f"layer{layer_id} k",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_k",
+        )
+
+        log_histogram_heatmap(
+            v_spectra,
+            title_suffix=f"layer{layer_id} v",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_v",
+        )
 
     if step is not None:
         scalars["pe_offline/ckpt_step"] = float(step)
@@ -302,6 +405,8 @@ def main():
                         help="W&B entity (optional)")
     parser.add_argument("--device", type=str, default="cuda",
                         help="Device to run analysis on (cuda or cpu)")
+    parser.add_argument("--plot_dir", type=str, default="pe_offline_plots",
+                        help="Directory to save Matplotlib PE iteration plots")
     args = parser.parse_args()
 
     ckpt_paths = sorted(glob.glob(args.ckpt_glob))
@@ -311,46 +416,14 @@ def main():
     wandb.init(project=args.project, entity=args.entity, name=args.run_name,
                config={"ckpt_glob": args.ckpt_glob})
 
-    # Single consolidated table for all checkpoints
-    series_table = make_series_table()
-    curve_acc = {}
+    # We only log heatmaps from inside analyze_checkpoint; no scalars or tables here.
+    series_table = None
 
     for idx, path in enumerate(ckpt_paths):
-        scalars = analyze_checkpoint(path, device=args.device, series_table=series_table, curve_acc=curve_acc)
+        scalars = analyze_checkpoint(path, device=args.device, series_table=series_table)
         step = int(scalars.get("pe_offline/ckpt_step", idx))
-        wandb.log(scalars, step=step)
-        print(f"[analyze_pe_from_ckpts] Analyzed {path}")
+        print(f"[analyze_pe_from_ckpts] Analyzed {path} (step={step})")
 
-    # Log the table once at the end so you can build one graph across ckpts
-    wandb.log({"pe_offline/iter_curves": series_table})
-
-    # Additionally, log ready-made line_series plots per (layer, part, metric)
-    for (layer_id, part, metric_name), by_ckpt in curve_acc.items():
-        lengths = {len(v) for v in by_ckpt.values()}
-        if len(lengths) != 1:
-            print(
-                f"[analyze_pe_from_ckpts] Skipping plot for layer={layer_id}, part={part}, metric={metric_name} "
-                f"due to unequal series lengths: {lengths}"
-            )
-            continue
-
-        num_points = next(iter(lengths))
-        xs = list(range(num_points))
-        ys = []
-        keys = []
-        for ckpt_step in sorted(by_ckpt.keys()):
-            ys.append(by_ckpt[ckpt_step])
-            keys.append(f"ckpt_{ckpt_step}")
-
-        plot = wandb.plot.line_series(
-            xs=xs,
-            ys=ys,
-            keys=keys,
-            title=f"PE iter curves - layer{layer_id} {part} {metric_name}",
-            xname="pe_iter",
-            yname=metric_name,
-        )
-        wandb.log({f"pe_offline/iter_curve/layer{layer_id}_{part}/{metric_name}": plot})
     wandb.finish()
 
 
