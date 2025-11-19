@@ -259,10 +259,6 @@ def analyze_checkpoint(
         if G.ndim > 2:
             G = G.view(G.size(0), -1)
 
-        # (1) Raw stacked update SVD (scalar logs)
-        raw_prefix = f"pe_offline/layer{layer_id}_stacked_qkv/raw"
-        scalars.update(compute_svd_metrics(G, raw_prefix))
-
         # (2) PE coefficients for this configuration
         coeffs_lists = get_coeffs_for_config(
             num_iters=polar_num_iters,
@@ -306,57 +302,72 @@ def analyze_checkpoint(
                 add_curve_points(curve_acc, ckpt_step, layer_id, "v", iter_idx, metrics_v)
                 v_spectra.append(svd_spectrum(V))
 
-        if stacked_spectra:
-            spec_t = torch.stack([s.cpu() for s in stacked_spectra], dim=0)
+        # Helper: given a list of spectra, build a 2D histogram over log10(sigma)
+        # (x-axis bins) vs PE iteration (y-axis rows).
+        def log_histogram_heatmap(spectra_list, title_suffix, wandb_key):
+            if not spectra_list:
+                return
+
+            spec_t = torch.stack([s.cpu() for s in spectra_list], dim=0)  # [T, num_svs]
             spec_log = torch.log10(spec_t + 1e-12)
+            T, _ = spec_log.shape
+
+            num_bins = 50
+            vmin = spec_log.min().item()
+            vmax = spec_log.max().item()
+            if vmin == vmax:
+                vmax = vmin + 1e-3
+
+            edges = torch.linspace(vmin, vmax, num_bins + 1)
+            centers = 0.5 * (edges[:-1] + edges[1:])
+
+            hist = torch.zeros(T, num_bins, dtype=torch.float32)
+            for i in range(T):
+                vals = spec_log[i].flatten()
+                idx = torch.bucketize(vals, edges) - 1
+                idx = idx.clamp(0, num_bins - 1)
+                hist[i].index_add_(0, idx, torch.ones_like(vals, dtype=hist.dtype))
+
             fig, ax = plt.subplots()
-            im = ax.imshow(spec_log.numpy(), aspect="auto", origin="lower", interpolation="nearest")
-            ax.set_xlabel("singular_index")
+            im = ax.imshow(
+                hist.numpy(),
+                aspect="auto",
+                origin="lower",
+                interpolation="nearest",
+                extent=[centers[0].item(), centers[-1].item(), 0, T - 1],
+            )
+            ax.set_xlabel("log10(sigma)")
             ax.set_ylabel("pe_iter")
-            ax.set_title(f"log10 SV spectrum vs PE iter - ckpt{ckpt_step} layer{layer_id} stacked_qkv")
+            ax.set_title(f"SV density vs PE iter - ckpt{ckpt_step} {title_suffix}")
             cbar = fig.colorbar(im, ax=ax)
-            cbar.set_label("log10(sigma)")
-            wandb.log({f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_stacked_qkv": wandb.Image(fig)}, step=ckpt_step)
+            cbar.set_label("count")
+            wandb.log({wandb_key: wandb.Image(fig)}, step=ckpt_step)
             plt.close(fig)
 
-        if q_spectra:
-            spec_t = torch.stack([s.cpu() for s in q_spectra], dim=0)
-            spec_log = torch.log10(spec_t + 1e-12)
-            fig, ax = plt.subplots()
-            im = ax.imshow(spec_log.numpy(), aspect="auto", origin="lower", interpolation="nearest")
-            ax.set_xlabel("singular_index")
-            ax.set_ylabel("pe_iter")
-            ax.set_title(f"log10 SV spectrum vs PE iter - ckpt{ckpt_step} layer{layer_id} q")
-            cbar = fig.colorbar(im, ax=ax)
-            cbar.set_label("log10(sigma)")
-            wandb.log({f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_q": wandb.Image(fig)}, step=ckpt_step)
-            plt.close(fig)
+        # Log heatmaps for stacked QKV and (if available) Q/K/V
+        log_histogram_heatmap(
+            stacked_spectra,
+            title_suffix=f"layer{layer_id} stacked_qkv",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_stacked_qkv",
+        )
 
-        if k_spectra:
-            spec_t = torch.stack([s.cpu() for s in k_spectra], dim=0)
-            spec_log = torch.log10(spec_t + 1e-12)
-            fig, ax = plt.subplots()
-            im = ax.imshow(spec_log.numpy(), aspect="auto", origin="lower", interpolation="nearest")
-            ax.set_xlabel("singular_index")
-            ax.set_ylabel("pe_iter")
-            ax.set_title(f"log10 SV spectrum vs PE iter - ckpt{ckpt_step} layer{layer_id} k")
-            cbar = fig.colorbar(im, ax=ax)
-            cbar.set_label("log10(sigma)")
-            wandb.log({f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_k": wandb.Image(fig)}, step=ckpt_step)
-            plt.close(fig)
+        log_histogram_heatmap(
+            q_spectra,
+            title_suffix=f"layer{layer_id} q",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_q",
+        )
 
-        if v_spectra:
-            spec_t = torch.stack([s.cpu() for s in v_spectra], dim=0)
-            spec_log = torch.log10(spec_t + 1e-12)
-            fig, ax = plt.subplots()
-            im = ax.imshow(spec_log.numpy(), aspect="auto", origin="lower", interpolation="nearest")
-            ax.set_xlabel("singular_index")
-            ax.set_ylabel("pe_iter")
-            ax.set_title(f"log10 SV spectrum vs PE iter - ckpt{ckpt_step} layer{layer_id} v")
-            cbar = fig.colorbar(im, ax=ax)
-            cbar.set_label("log10(sigma)")
-            wandb.log({f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_v": wandb.Image(fig)}, step=ckpt_step)
-            plt.close(fig)
+        log_histogram_heatmap(
+            k_spectra,
+            title_suffix=f"layer{layer_id} k",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_k",
+        )
+
+        log_histogram_heatmap(
+            v_spectra,
+            title_suffix=f"layer{layer_id} v",
+            wandb_key=f"pe_offline/heatmap/ckpt{ckpt_step}/layer{layer_id}_v",
+        )
 
     if step is not None:
         scalars["pe_offline/ckpt_step"] = float(step)
