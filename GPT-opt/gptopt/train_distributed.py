@@ -131,14 +131,16 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                 except Exception as e:
                     print(f"Warning: Could not compute SVD for momentum buffers: {e}")
 
-            # Post-PE update histograms (captured by optimizer during training step)
-            if hasattr(optimizer, '_pe_svd_after_svals') and optimizer._pe_svd_after_svals:
-                for layer_key, parts in optimizer._pe_svd_after_svals.items():
-                    for part_name, svals in parts.items():
-                        key = f'svd/post_update/{layer_key}/{part_name}'
-                        metrics[key] = wandb.Histogram(svals.float().numpy())
-                optimizer._pe_svd_after_svals.clear()
-                # For non-square matrices, compute W^T W (smaller dimension)
+            # Post-PE update histograms (at every SVD diagnostic step),
+            # using the latest cached post-PE update matrices from Muon.
+            if hasattr(optimizer, '_pe_last_update_mats') and optimizer._pe_last_update_mats:
+                for layer_key, parts in optimizer._pe_last_update_mats.items():
+                    for part_name, mat in parts.items():
+                        log_hist('post_update', layer_key, part_name, mat)
+            
+            # Compute weight orthogonality: ||W^T W - I||_F
+            # This measures if weights maintain orthogonality over training
+            def compute_orthogonality(matrix, prefix):
                 if matrix.size(0) > matrix.size(1):
                     WTW = matrix.T @ matrix  # cols × cols
                 else:
