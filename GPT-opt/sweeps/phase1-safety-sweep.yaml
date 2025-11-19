@@ -81,7 +81,10 @@ parameters:
     value: 800
   
   logging_params.save_ckpt_step:
-    value: 3200
+    value: 6400
+
+  logging_params.keep_last:
+    value: 4
   
   logging_params.wandb.project:
     value: "cs182-project-GPT-opt"

@@ -385,8 +385,8 @@ class Muon(torch.optim.Optimizer):
                                     # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
                                     self._pe_ortho_errs_before_per_layer = {}
                                     self._pe_ortho_errs_after_per_layer = {}
-                                    # Per-layer post-PE SVD metrics (tracked only for stacked_qkv sentinel layers)
-                                    self._pe_svd_after_per_layer = {}
+                                    # Per-layer post-PE singular values (stacked + Q/K/V)
+                                    self._pe_svd_after_svals = {}
                                 self._pe_ortho_errs_before.append(ortho_err_before)
                                 self._pe_ortho_errs_after.append(ortho_err_after)
                                 
@@ -403,29 +403,32 @@ class Muon(torch.optim.Optimizer):
                                             self._pe_ortho_errs_before_per_layer[layer_key].append(ortho_err_before)
                                             self._pe_ortho_errs_after_per_layer[layer_key].append(ortho_err_after)
 
-                                            # Also track SVD metrics of the post-PE update u for this layer
-                                            # Use a representative 2D slice (matching ortho_err computation)
-                                            u_sample = u if u.ndim == 2 else u[0]
-                                            u_flat = u_sample.view(u_sample.size(0), -1)
-                                            try:
-                                                U_svd, S_svd, Vh_svd = torch.linalg.svd(u_flat, full_matrices=False)
-                                                sigma_max = S_svd[0].item()
-                                                sigma_min = S_svd[-1].item()
-                                                cond = sigma_max / (sigma_min + 1e-10)
-                                                eff_rank = (S_svd.sum() / (sigma_max + 1e-10)).item()
-                                                spectral_gap = (S_svd[0] / S_svd[1]).item() if len(S_svd) > 1 else None
+                                            # Capture singular values of the post-PE update (stacked + split Q/K/V)
+                                            if not hasattr(self, '_pe_svd_after_svals'):
+                                                self._pe_svd_after_svals = {}
 
-                                                self._pe_svd_after_per_layer[layer_key] = {
-                                                    'sigma_max': sigma_max,
-                                                    'sigma_min': sigma_min,
-                                                    'condition_number': cond,
-                                                    'effective_rank': eff_rank,
-                                                }
-                                                if spectral_gap is not None:
-                                                    self._pe_svd_after_per_layer[layer_key]['spectral_gap'] = spectral_gap
-                                            except Exception:
-                                                # If SVD fails for any reason, skip logging for this step
-                                                pass
+                                            def compute_svals(matrix: torch.Tensor) -> torch.Tensor:
+                                                mat = matrix.to(dtype=torch.float32)
+                                                try:
+                                                    return torch.linalg.svdvals(mat).detach().cpu()
+                                                except RuntimeError:
+                                                    return torch.linalg.svdvals(mat.cpu()).detach()
+
+                                            u_matrix = u if u.ndim == 2 else u.reshape(state["momentum_buffer"].shape)
+                                            if u_matrix.ndim > 2:
+                                                u_matrix = u_matrix.view(u_matrix.size(0), -1)
+
+                                            svals_entry = self._pe_svd_after_svals.setdefault(layer_key, {})
+                                            svals_entry['stacked'] = compute_svals(u_matrix)
+
+                                            if u_matrix.size(0) % 3 == 0:
+                                                rows = u_matrix.size(0) // 3
+                                                Q_u = u_matrix[0:rows, :]
+                                                K_u = u_matrix[rows:2*rows, :]
+                                                V_u = u_matrix[2*rows:3*rows, :]
+                                                svals_entry['q'] = compute_svals(Q_u)
+                                                svals_entry['k'] = compute_svals(K_u)
+                                                svals_entry['v'] = compute_svals(V_u)
                                             break
                         else:
                             u = result if not isinstance(result, tuple) else result[0]

@@ -44,14 +44,17 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                 ('h.11.attn.c_attn.weight', 'layer11'), # Last layer attention
             ]
             
-            # Helper to log singular value distributions as histograms
-            def log_singular_value_histogram(matrix, prefix):
-                """Compute SVD and store histogram of singular values."""
+            def log_hist(category: str, layer_label: str, part: str, matrix: torch.Tensor):
+                """Compute singular values and log as histogram for the given category."""
+                tensor = matrix
+                if tensor.ndim > 2:
+                    tensor = tensor.view(tensor.size(0), -1)
                 try:
-                    singular_vals = torch.linalg.svdvals(matrix)
+                    svals = torch.linalg.svdvals(tensor)
                 except RuntimeError:
-                    singular_vals = torch.linalg.svdvals(matrix.cpu()).to(matrix.device)
-                metrics[f'{prefix}/singular_values'] = wandb.Histogram(singular_vals.detach().float().cpu().numpy())
+                    svals = torch.linalg.svdvals(tensor.cpu()).to(tensor.device)
+                key = f'svd/{category}/{layer_label}/{part}'
+                metrics[key] = wandb.Histogram(svals.detach().float().cpu().numpy())
             
             for target_name, layer_label in svd_targets:
                 try:
@@ -66,17 +69,16 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                             # Split QKV weight matrix into Q, K, V (each 768 × 768)
                             # c_attn.weight is [2304, 768] = [Q; K; V] stacked vertically
                             if W.size(0) == 2304 and W.size(1) == 768:
-                                Q = W[0:768, :]      # First 768 rows
-                                K = W[768:1536, :]   # Middle 768 rows
-                                V = W[1536:2304, :]  # Last 768 rows
-                                
-                                # Compute SVD for each projection
-                                log_singular_value_histogram(Q, f'svd/{layer_label}_q')
-                                log_singular_value_histogram(K, f'svd/{layer_label}_k')
-                                log_singular_value_histogram(V, f'svd/{layer_label}_v')
+                                Q = W[0:768, :]
+                                K = W[768:1536, :]
+                                V = W[1536:2304, :]
+
+                                log_hist('weights', layer_label, 'q', Q)
+                                log_hist('weights', layer_label, 'k', K)
+                                log_hist('weights', layer_label, 'v', V)
+                                log_hist('weights', layer_label, 'stacked', W)
                             else:
-                                # Fallback: compute on full matrix if not standard QKV shape
-                                log_singular_value_histogram(W, f'svd/{layer_label}_qkv')
+                                log_hist('weights', layer_label, 'stacked', W)
                             
                             break  # Found the target, move to next
                 except Exception as e:
@@ -114,29 +116,28 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                                             # Note: Even though PE processes stacked (2304×768) when split_heads=False,
                                             # we still want to measure per-projection conditioning for analysis
                                             if buf.size(0) == 2304 and buf.size(1) == 768:
-                                                Q_buf = buf[0:768, :]      # Q update
-                                                K_buf = buf[768:1536, :]   # K update
-                                                V_buf = buf[1536:2304, :]  # V update
-                                                
-                                                # Compute singular value histograms for each projection
-                                                log_singular_value_histogram(Q_buf, f'svd/update_{layer_label}_q')
-                                                log_singular_value_histogram(K_buf, f'svd/update_{layer_label}_k')
-                                                log_singular_value_histogram(V_buf, f'svd/update_{layer_label}_v')
-                                                
-                                                # Also compute on full stacked buffer (what PE actually sees)
-                                                log_singular_value_histogram(buf, f'svd/update_{layer_label}_stacked')
+                                                Q_buf = buf[0:768, :]
+                                                K_buf = buf[768:1536, :]
+                                                V_buf = buf[1536:2304, :]
+
+                                                log_hist('pre_update', layer_label, 'q', Q_buf)
+                                                log_hist('pre_update', layer_label, 'k', K_buf)
+                                                log_hist('pre_update', layer_label, 'v', V_buf)
+                                                log_hist('pre_update', layer_label, 'stacked', buf)
                                             else:
-                                                # Fallback: compute on full buffer
-                                                log_singular_value_histogram(buf, f'svd/update_{layer_label}')
+                                                log_hist('pre_update', layer_label, 'stacked', buf)
                                         
                                         break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute SVD for momentum buffers: {e}")
-            
-            # Compute weight orthogonality: ||W^T W - I||_F
-            # This measures if weights maintain orthogonality over training
-            def compute_orthogonality(matrix, prefix):
-                """Compute orthogonality error for a matrix."""
+
+            # Post-PE update histograms (captured by optimizer during training step)
+            if hasattr(optimizer, '_pe_svd_after_svals') and optimizer._pe_svd_after_svals:
+                for layer_key, parts in optimizer._pe_svd_after_svals.items():
+                    for part_name, svals in parts.items():
+                        key = f'svd/post_update/{layer_key}/{part_name}'
+                        metrics[key] = wandb.Histogram(svals.float().numpy())
+                optimizer._pe_svd_after_svals.clear()
                 # For non-square matrices, compute W^T W (smaller dimension)
                 if matrix.size(0) > matrix.size(1):
                     WTW = matrix.T @ matrix  # cols × cols
@@ -511,11 +512,6 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                                 wandb_diag_dict[f"ortho_err_after/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
 
                     # Per-layer post-PE SVD metrics (condition number, sigma_max/min, effective_rank, spectral_gap)
-                    if hasattr(optimizer, '_pe_svd_after_per_layer'):
-                        for layer_key, svd_dict in optimizer._pe_svd_after_per_layer.items():
-                            for metric_name, value in svd_dict.items():
-                                wandb_diag_dict[f"pe_svd_after/{layer_key}/{metric_name}"] = value
-                    
                     # Attention health and weight scales (compute_svd=False to skip expensive SVD)
                     try:
                         advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=False)
