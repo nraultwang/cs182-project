@@ -419,14 +419,26 @@ def main():
                         help="Device to run analysis on (cuda or cpu)")
     parser.add_argument("--plot_dir", type=str, default="pe_offline_plots",
                         help="Directory to save Matplotlib PE iteration plots")
+    parser.add_argument("--wandb_run_id", type=str, default=None,
+                        help="Existing W&B run ID to resume (e.g., a sweep run). If set, logs are attached to that run.")
     args = parser.parse_args()
 
     ckpt_paths = sorted(glob.glob(args.ckpt_glob))
     if not ckpt_paths:
         raise SystemExit(f"No checkpoints matched glob: {args.ckpt_glob}")
 
-    wandb.init(project=args.project, entity=args.entity, name=args.run_name,
-               config={"ckpt_glob": args.ckpt_glob})
+    wandb_init_kwargs = {
+        "project": args.project,
+        "entity": args.entity,
+        "name": args.run_name,
+        "config": {"ckpt_glob": args.ckpt_glob},
+    }
+    if args.wandb_run_id is not None:
+        # Attach logs to an existing run (e.g., a sweep run)
+        wandb_init_kwargs["id"] = args.wandb_run_id
+        wandb_init_kwargs["resume"] = "allow"
+
+    wandb.init(**wandb_init_kwargs)
 
     # We only log heatmaps from inside analyze_checkpoint; no scalars or tables here.
     series_table = None
