@@ -302,31 +302,47 @@ def analyze_checkpoint(
                 add_curve_points(curve_acc, ckpt_step, layer_id, "v", iter_idx, metrics_v)
                 v_spectra.append(svd_spectrum(V))
 
+        # Compute shared log10(sigma) bin edges for this checkpoint across all parts
+        all_spectra = stacked_spectra + q_spectra + k_spectra + v_spectra
+        edges = None
+        centers = None
+        if all_spectra:
+            all_logs = []
+            for s in all_spectra:
+                vals = torch.log10(s.cpu().flatten() + 1e-12)
+                all_logs.append(vals)
+            all_logs = torch.cat(all_logs, dim=0)
+            vmin = all_logs.min().item()
+            vmax = all_logs.max().item()
+            if vmin == vmax:
+                vmax = vmin + 1e-3
+
+            num_bins = 50
+            edges = torch.linspace(vmin, vmax, num_bins + 1)
+            centers = 0.5 * (edges[:-1] + edges[1:])
+
         # Helper: given a list of spectra, build a 2D histogram over log10(sigma)
-        # (x-axis bins) vs PE iteration (y-axis rows).
+        # (x-axis bins) vs PE iteration (y-axis rows), with per-row normalization.
         def log_histogram_heatmap(spectra_list, title_suffix, wandb_key):
-            if not spectra_list:
+            if not spectra_list or edges is None or centers is None:
                 return
 
             spec_t = torch.stack([s.cpu() for s in spectra_list], dim=0)  # [T, num_svs]
             spec_log = torch.log10(spec_t + 1e-12)
             T, _ = spec_log.shape
 
-            num_bins = 50
-            vmin = spec_log.min().item()
-            vmax = spec_log.max().item()
-            if vmin == vmax:
-                vmax = vmin + 1e-3
-
-            edges = torch.linspace(vmin, vmax, num_bins + 1)
-            centers = 0.5 * (edges[:-1] + edges[1:])
-
+            num_bins = edges.numel() - 1
             hist = torch.zeros(T, num_bins, dtype=torch.float32)
             for i in range(T):
                 vals = spec_log[i].flatten()
                 idx = torch.bucketize(vals, edges) - 1
                 idx = idx.clamp(0, num_bins - 1)
                 hist[i].index_add_(0, idx, torch.ones_like(vals, dtype=hist.dtype))
+
+            # Normalize each row so values are in [0,1] and sum to 1 per PE iter
+            row_sums = hist.sum(dim=1, keepdim=True)
+            row_sums = row_sums.clamp_min(1e-12)
+            hist = hist / row_sums
 
             fig, ax = plt.subplots()
             im = ax.imshow(
@@ -340,11 +356,11 @@ def analyze_checkpoint(
             ax.set_ylabel("pe_iter")
             ax.set_title(f"SV density vs PE iter - ckpt{ckpt_step} {title_suffix}")
             cbar = fig.colorbar(im, ax=ax)
-            cbar.set_label("count")
+            cbar.set_label("density (per row)")
             wandb.log({wandb_key: wandb.Image(fig)}, step=ckpt_step)
             plt.close(fig)
 
-        # Log heatmaps for stacked QKV and (if available) Q/K/V
+        # Log heatmaps for stacked QKV and (if available) Q/K/V using shared binning
         log_histogram_heatmap(
             stacked_spectra,
             title_suffix=f"layer{layer_id} stacked_qkv",
