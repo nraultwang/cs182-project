@@ -469,6 +469,31 @@ class Muon(torch.optim.Optimizer):
                         g = g.reshape(old_shape)
                         u = u.reshape(old_shape)
 
+                # Cache latest post-PE update matrices for sentinel stacked QKV layers
+                # so that SVD diagnostics can log svd/post_update/... at every SVD step.
+                param_name = state.get("param_name", "")
+                if self.muon_mode == "stacked_qkv" and state.get("is_W_QKV", False) and "attn.c_attn.weight" in param_name:
+                    for target_layer in [0, 5, 11]:
+                        if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                            layer_key = f"layer{target_layer}"
+                            if not hasattr(self, "_pe_last_update_mats"):
+                                self._pe_last_update_mats = {}
+
+                            u_mat = u
+                            if u_mat.ndim > 2:
+                                u_mat = u_mat.view(u_mat.size(0), -1)
+                            u_mat_cpu = u_mat.detach().to(dtype=torch.float32).cpu()
+
+                            entry = self._pe_last_update_mats.setdefault(layer_key, {})
+                            entry["stacked"] = u_mat_cpu
+
+                            if u_mat_cpu.size(0) % 3 == 0:
+                                rows = u_mat_cpu.size(0) // 3
+                                entry["q"] = u_mat_cpu[0:rows, :]
+                                entry["k"] = u_mat_cpu[rows:2*rows, :]
+                                entry["v"] = u_mat_cpu[2*rows:3*rows, :]
+                            break
+
                 # scale update
                 adjusted_lr = self.adjust_lr_for_muon(
                     lr,
