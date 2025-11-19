@@ -346,14 +346,14 @@ def analyze_checkpoint(
 
             fig, ax = plt.subplots()
             im = ax.imshow(
-                hist.numpy(),
+                hist.numpy().T,
                 aspect="auto",
                 origin="lower",
                 interpolation="nearest",
-                extent=[centers[0].item(), centers[-1].item(), 0, T - 1],
+                extent=[0, T - 1, centers[0].item(), centers[-1].item()],
             )
-            ax.set_xlabel("log10(sigma)")
-            ax.set_ylabel("pe_iter")
+            ax.set_xlabel("pe_iter")
+            ax.set_ylabel("log10(sigma)")
             ax.set_title(f"SV density vs PE iter - ckpt{ckpt_step} {title_suffix}")
             cbar = fig.colorbar(im, ax=ax)
             cbar.set_label("density (per row)")
