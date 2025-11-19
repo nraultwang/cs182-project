@@ -22,6 +22,7 @@
 
 import argparse
 import glob
+import math
 import os
 from typing import Dict, Any, List
 
@@ -312,13 +313,16 @@ def analyze_checkpoint(
                 vals = torch.log10(s.cpu().flatten() + 1e-12)
                 all_logs.append(vals)
             all_logs = torch.cat(all_logs, dim=0)
-            vmin = all_logs.min().item()
-            vmax = all_logs.max().item()
-            if vmin == vmax:
-                vmax = vmin + 1e-3
+
+            exp_min = math.floor(all_logs.min().item())
+            exp_max_data = math.ceil(all_logs.max().item())
+            # Ensure the upper end of the range always includes 1e1 (exp = 1)
+            exp_max = max(exp_max_data, 1)
+            if exp_min == exp_max:
+                exp_min -= 1
 
             num_bins = 50
-            edges = torch.linspace(vmin, vmax, num_bins + 1)
+            edges = torch.linspace(exp_min, exp_max, num_bins + 1)
             centers = 0.5 * (edges[:-1] + edges[1:])
 
         # Helper: given a list of spectra, build a 2D histogram over log10(sigma)
@@ -353,7 +357,14 @@ def analyze_checkpoint(
                 extent=[0, T - 1, centers[0].item(), centers[-1].item()],
             )
             ax.set_xlabel("pe_iter")
-            ax.set_ylabel("log10(sigma)")
+            ax.set_ylabel("sigma (log scale)")
+
+            # Set y-ticks at integer log10 values and label them as 1eN
+            y_min, y_max = centers[0].item(), centers[-1].item()
+            exp_ticks = list(range(math.floor(y_min), math.ceil(y_max) + 1))
+            ax.set_yticks(exp_ticks)
+            ax.set_yticklabels([f"1e{int(e)}" for e in exp_ticks])
+
             ax.set_title(f"SV density vs PE iter - ckpt{ckpt_step} {title_suffix}")
             cbar = fig.colorbar(im, ax=ax)
             cbar.set_label("density (per row)")
