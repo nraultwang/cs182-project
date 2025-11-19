@@ -25,7 +25,7 @@ This document describes all metrics logged during training, organized by categor
 
 ## Quick Summary
 
-**Total Metrics: ~181** across 6 categories, automatically logged to W&B
+**Total Metrics: ~150** across 6 categories, automatically logged to W&B
 
 | Category | Purpose | Count | Frequency | Phase 0 | Phase 1 | Overhead |
 |----------|---------|-------|-----------|---------|---------|----------|
@@ -33,9 +33,9 @@ This document describes all metrics logged during training, organized by categor
 | **PolarExpress** | Optimizer health (if using PE) | 3 | Every diag_log_step (10 steps) | 38 evt | 191 evt | <0.001% |
 | **Attention Health** | Catch head collapse across depth | 21 | Every diag_log_step (10 steps) | 38 evt | 191 evt | 0.004% |
 | **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every diag_log_step (10 steps) | 38 evt | 191 evt | 0.002% |
-| **SVD + Orthogonality** | Per-projection conditioning analysis | 123 | Every svd_log_step (50 steps) | 0 evt | 38 evt | **0.029%** |
+| **SVD + Orthogonality** | Per-projection conditioning analysis | ~91 | Every svd_log_step (50 steps) | 0 evt | 38 evt | **0.029%** |
 | **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | 381 | 1,907 | <0.001% |
-| **PHASE TOTAL** | — | **181** | — | **0.003%** | **0.035%** | — |
+| **PHASE TOTAL** | — | **149** | — | **0.003%** | **0.035%** | — |
 
 **Three Independent Logging Frequencies:**
 - **log_step (160 microsteps)**: End-to-end metrics only (cheap)
@@ -297,7 +297,7 @@ ortho/layer0_q/err  ortho/layer5_q/err  ortho/layer11_q/err
 | **diag_log_step=160** (10 steps) | pe/*, logits/*, attn/*, qkv/*, grads/*, weights/* | 38 | 191 | 0.8ms | ~30ms | ~150ms | 0.003% | **0.0083%** |
 | **svd_log_step=800** (50 steps) | svd/*, ortho/* | 0 | 38 | 140ms | 0ms | **~5,320ms** | 0% | **0.029%** |
 | **Every step** | train/grad_norm, train/amp_* | 381 | 1,907 | 0.1ms | ~38ms | ~200ms | 0.003% | 0.001% |
-| **TOTAL OVERHEAD** | **~181 metrics** | — | — | — | **~72ms** | **~5,685ms** | **0.006%** | **0.031%** |
+| **TOTAL OVERHEAD** | **~150 metrics** | — | — | — | **~72ms** | **~5,685ms** | **0.006%** | **0.031%** |
 
 **Key Change from Previous Config:**
 - Old: All diagnostics (PE, attention, scales) at svd_log_step (50 steps) → 38 events
@@ -342,7 +342,7 @@ ortho/layer0_q/err  ortho/layer5_q/err  ortho/layer11_q/err
          training_params, logging_params, wandb_run=wandb_run)
    ```
 
-3. **All 76 metrics are automatically logged** with no additional configuration:
+3. **All metrics described above are automatically logged** with no additional configuration:
    - Every step: loss, grad_norm, lr, TPS, stability alarms
    - Every 10 steps: AMP scaler/overflows
    - Every 100 steps: PE metrics, attention health, QKV norms, weight scales, gradients
