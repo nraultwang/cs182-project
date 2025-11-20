@@ -42,7 +42,7 @@ parameters:
     value: [5]
 
   optimizer_params.args.polar_safety:
-    values: [1.00, 1.01]
+    value: 1.01
 
   optimizer_params.args.polar_cushion:
     value: 0.024
@@ -52,7 +52,7 @@ parameters:
 
   # Short validation run: single seed, 0.2 epochs to inspect SVD histograms
   seed:
-    values: [42]
+    value: 42
 
   training_data.training_params.num_epochs:
     value: 0.2
