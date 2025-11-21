@@ -68,8 +68,11 @@ parameters:
   training_data.training_params.num_epochs:
     value: 1
   
+  training_data.training_params.batch_size:
+    value: 8
+
   training_data.training_params.tokens_processed:
-    value: 524288
+    value: 131072
   
   # Logging (same cadence as Phase 1 stage 2)
   # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
