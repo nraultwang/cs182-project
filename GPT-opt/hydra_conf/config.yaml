@@ -23,6 +23,8 @@ optimizer_params:
     polar_safety: null
     polar_cushion: null
     adamw_betas: null
+    muon_mode: null
+    split_heads: null
 
 # Learning rate schedule
 lr_schedule:
