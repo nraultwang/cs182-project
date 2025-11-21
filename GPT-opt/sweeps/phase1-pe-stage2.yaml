@@ -1,0 +1,122 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase1-pe-stage2"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer base
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (fixed for Phase 1)
+  optimizer_params.args.lr:
+    value: 0.01
+  
+  optimizer_params.args.weight_decay:
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (fixed for Phase 1)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+  
+  # PolarExpress method
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  # Stage 2: Sweep all num_iters patterns (no filtering needed)
+  optimizer_params.args.polar_num_iters:
+    values: 
+      - [1]      # 1 iteration always
+      - [2]      # 2 iterations always
+      - [3]      # 3 iterations always
+      - [3, 0]   # Cycle: 3 then skip (50% cost reduction)
+      - [4]      # 4 iterations always
+      - [5]      # 5 iterations always
+      - [5, 0]   # Cycle: 5 then skip (50% cost reduction)
+      - [5, 1]   # Cycle: 5 then 1 (40% cost reduction)
+      - [5, 2]   # Cycle: 5 then 2 (30% cost reduction)
+      - [5, 3]   # Cycle: 5 then 3 (~20% cost reduction)
+      - [6, 3]   # Cycle: 6 then 3 (~25% cost reduction)
+      - [6]      # Cycle: 6 iterations always
+      - [7]      # 7 iterations always
+      - [7, 0]   # Cycle: 7 then skip (50% cost reduction)
+      - [7, 5]   # Cycle: 7 then 5 (~15% cost reduction)
+      - [7, 3]   # Cycle: 7 then 3 (~30% cost reduction)
+  
+  # TODO: Set to the BEST safety value from Stage 1 (either 1.00 or 1.01)
+  optimizer_params.args.polar_safety:
+    value: 1.01    # PLACEHOLDER - replace with best from Stage 1
+  
+  # Stage 2: Sweep all cushion values
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+  
+  # Newton-Schulz steps (Muon parameter)
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Stage 2: All 3 seeds for statistical significance on final configs
+  seed:
+    values: [42, 123, 456]
+  
+  # Full 1 epoch training for final evaluation
+  training_data.training_params.num_epochs:
+    value: 1
+  
+  training_data.training_params.tokens_processed:
+    value: 524288
+  
+  # Logging (reduced frequencies for 1-epoch runs)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+  
+  logging_params.diag_log_step:
+    value: 800
+  
+  logging_params.val_step:
+    value: 3200
+  
+  logging_params.svd_log_step:
+    value: 800
+  
+  logging_params.save_ckpt_step:
+    value: 3200
+  
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+  
+  logging_params.wandb.tags:
+    value: ["phase1", "stage2", "pe-hyperparams", "finalists"]
+
+# Phase 1 Stage 2: 15 num_iters × 1 safety × 3 seeds = 45 runs
+# Purpose: Full sweep of {num_iters, cushion} at the best safety factor
+# 
+# Each run: ~3.5 hours (1 epoch on A6000, 8 validation points)
+# Total time with 2 GPUs: ~78 hours (~3.5 days)
+# 
+# Instructions for use:
+# 1. After Stage 1 completes, analyze results in W&B
+# 2. Identify best polar_safety value (1.00 or 1.01) by comparing val/loss
+# 3. Update line 60 above with the best safety value
+# 4. Run: wandb sweep sweeps/phase1-pe-stage2-template.yaml
+# 5. Launch agents: CUDA_VISIBLE_DEVICES=0,1 ./run_sweep.sh <SWEEP_ID>

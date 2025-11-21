@@ -1,0 +1,104 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase1-safety-sweep"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer base
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (fixed for Phase 1)
+  optimizer_params.args.lr:
+    value: 0.01
+  
+  optimizer_params.args.weight_decay:
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (fixed for Phase 1)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+  
+  # PolarExpress method
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  # Stage 1: Fix standard PE params, sweep safety only
+  optimizer_params.args.polar_num_iters:
+    value: [5]  # Standard 5 iterations
+  
+  optimizer_params.args.polar_safety:
+    values: [1.00, 1.01]  # THE MAIN SWEEP: Find best safety factor
+  
+  optimizer_params.args.polar_cushion:
+    value: 0.024  # Paper's magic cushion value
+  
+  # Newton-Schulz steps (Muon parameter)
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Full statistical evaluation: 3 seeds, 1 epoch
+  seed:
+    values: [42, 123, 456]
+  
+  training_data.training_params.num_epochs:
+    value: 1
+  
+  training_data.training_params.tokens_processed:
+    value: 524288
+  
+  # Logging (reduced frequencies for 1-epoch runs)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+  
+  logging_params.diag_log_step:
+    value: 800
+  
+  logging_params.val_step:
+    value: 3200
+  
+  logging_params.svd_log_step:
+    value: 800
+  
+  logging_params.save_ckpt_step:
+    value: 0
+
+  logging_params.ckpt_schedule:
+    value: [0.0, 0.5, 1.0]
+
+  logging_params.keep_last:
+    value: 3
+  
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+  
+  logging_params.wandb.tags:
+    value: ["phase1", "stage1", "safety-sweep"]
+
+# Phase 1 Stage 1: 2 safety × 3 seeds × 1 epoch = 6 runs
+# Purpose: Identify best safety factor with strong statistical evidence
+# 
+# Each run: ~3.5 hours (1 epoch on A6000, 8 validation points)
+# Total time with 2 GPUs: ~11 hours (3 runs per GPU)
+# 
+# After completion, analyze val/loss by safety factor and select best for Stage 2

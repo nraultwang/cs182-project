@@ -407,14 +407,14 @@ def generate_coeffs_library(l0: float = 1e-3, degree: int = 5):
         degree: Polynomial degree (default 5 for quintic)
     
     Returns:
-        Dictionary with keys like 'n3_s1.00_c0.10' mapping to coefficient lists
+        Dictionary with keys like 'n{num_iters}_s{safety}_c{cushion}' mapping to coefficient lists
         
     Key format: 'n{num_iters}_s{safety}_c{cushion}'
-        - n: number of iterations (3, 5, 7)
+        - n: number of iterations (1, 2, 3, 4, 5, 6, 7)
         - s: safety factor (1.00, 1.01)
         - c: cushion (0.10, 0.05, 0.024)
     """
-    num_iters_options = [3, 5, 7]
+    num_iters_options = [1, 2, 3, 4, 5, 6, 7]
     safety_options = [1.0, 1.01]
     cushion_options = [0.1, 0.05, 0.02407327424182761]
     

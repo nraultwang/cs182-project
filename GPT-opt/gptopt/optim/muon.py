@@ -343,7 +343,6 @@ class Muon(torch.optim.Optimizer):
 
                 # Use the selected polar factorization method
                 import time as time_module
-                pe_start = time_module.time()
                 
                 # Compute orthogonality error every 100 steps using cached XTX
                 if not hasattr(self, '_pe_step_count'):
@@ -358,10 +357,16 @@ class Muon(torch.optim.Optimizer):
                 use_polarexpress = (hasattr(current_factorizer, 'func') and 
                                    current_factorizer.func.__name__ == 'PolarExpress')
                 
+                # Start timing just before the actual PE call
+                pe_start = time_module.time()
+                
                 if compute_ortho and use_polarexpress:
                     try:
                         # Request XTX to compute ortho error efficiently (before and after)
                         result = current_factorizer(g, group["ns_steps"], return_ortho_info=True)
+                        # Stop timing immediately after PE call, before diagnostic computation
+                        pe_time = (time_module.time() - pe_start) * 1000  # ms
+                        
                         if isinstance(result, tuple) and len(result) == 3:
                             u, XTX_before, XTX_after = result
                             # Compute ||XTX - I||_F using cached XTX values
@@ -377,22 +382,70 @@ class Muon(torch.optim.Optimizer):
                                     self._pe_ortho_errs_before = []
                                     self._pe_ortho_errs_after = []
                                     self._pe_times = []
+                                    # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
+                                    self._pe_ortho_errs_before_per_layer = {}
+                                    self._pe_ortho_errs_after_per_layer = {}
+                                    # Per-layer post-PE singular values (stacked + Q/K/V)
+                                    self._pe_svd_after_svals = {}
                                 self._pe_ortho_errs_before.append(ortho_err_before)
                                 self._pe_ortho_errs_after.append(ortho_err_after)
+                                
+                                # Track per-layer ortho errors for stacked QKV in layers 0, 5, 11
+                                param_name = state.get("param_name", "")
+                                if self.muon_mode == "stacked_qkv" and "attn.c_attn.weight" in param_name:
+                                    # Extract layer number from param name (e.g., "h.0.attn.c_attn.weight" -> 0)
+                                    for target_layer in [0, 5, 11]:
+                                        if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                                            layer_key = f"layer{target_layer}"
+                                            if layer_key not in self._pe_ortho_errs_before_per_layer:
+                                                self._pe_ortho_errs_before_per_layer[layer_key] = []
+                                                self._pe_ortho_errs_after_per_layer[layer_key] = []
+                                            self._pe_ortho_errs_before_per_layer[layer_key].append(ortho_err_before)
+                                            self._pe_ortho_errs_after_per_layer[layer_key].append(ortho_err_after)
+
+                                            # Capture singular values of the post-PE update (stacked + split Q/K/V)
+                                            if not hasattr(self, '_pe_svd_after_svals'):
+                                                self._pe_svd_after_svals = {}
+
+                                            def compute_svals(matrix: torch.Tensor) -> torch.Tensor:
+                                                mat = matrix.to(dtype=torch.float32)
+                                                try:
+                                                    return torch.linalg.svdvals(mat).detach().cpu()
+                                                except RuntimeError:
+                                                    return torch.linalg.svdvals(mat.cpu()).detach()
+
+                                            u_matrix = u if u.ndim == 2 else u.reshape(state["momentum_buffer"].shape)
+                                            if u_matrix.ndim > 2:
+                                                u_matrix = u_matrix.view(u_matrix.size(0), -1)
+
+                                            svals_entry = self._pe_svd_after_svals.setdefault(layer_key, {})
+                                            svals_entry['stacked'] = compute_svals(u_matrix)
+
+                                            if u_matrix.size(0) % 3 == 0:
+                                                rows = u_matrix.size(0) // 3
+                                                Q_u = u_matrix[0:rows, :]
+                                                K_u = u_matrix[rows:2*rows, :]
+                                                V_u = u_matrix[2*rows:3*rows, :]
+                                                svals_entry['q'] = compute_svals(Q_u)
+                                                svals_entry['k'] = compute_svals(K_u)
+                                                svals_entry['v'] = compute_svals(V_u)
+                                            break
                         else:
                             u = result if not isinstance(result, tuple) else result[0]
                     except Exception as e:
                         # Fallback if return_ortho_info not supported
                         u = current_factorizer(g, group["ns_steps"])
+                        pe_time = (time_module.time() - pe_start) * 1000  # ms
                 else:
                     u = current_factorizer(g, group["ns_steps"])
+                    pe_time = (time_module.time() - pe_start) * 1000  # ms
+                
+                # Store PE time (measured before any diagnostic computation)
+                if hasattr(self, '_pe_times'):
+                    self._pe_times.append(pe_time)
                 
                 # Increment counter after call
                 self.iter_counter += 1
-                
-                pe_time = (time_module.time() - pe_start) * 1000  # ms
-                if hasattr(self, '_pe_times'):
-                    self._pe_times.append(pe_time)
                 
                 # Reshape back to original shape after polar factorization
                 if old_shape is not None:
@@ -415,6 +468,31 @@ class Muon(torch.optim.Optimizer):
                         # Original split_heads mode
                         g = g.reshape(old_shape)
                         u = u.reshape(old_shape)
+
+                # Cache latest post-PE update matrices for sentinel stacked QKV layers
+                # so that SVD diagnostics can log svd/post_update/... at every SVD step.
+                param_name = state.get("param_name", "")
+                if self.muon_mode == "stacked_qkv" and state.get("is_W_QKV", False) and "attn.c_attn.weight" in param_name:
+                    for target_layer in [0, 5, 11]:
+                        if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                            layer_key = f"layer{target_layer}"
+                            if not hasattr(self, "_pe_last_update_mats"):
+                                self._pe_last_update_mats = {}
+
+                            u_mat = u
+                            if u_mat.ndim > 2:
+                                u_mat = u_mat.view(u_mat.size(0), -1)
+                            u_mat_cpu = u_mat.detach().to(dtype=torch.float32).cpu()
+
+                            entry = self._pe_last_update_mats.setdefault(layer_key, {})
+                            entry["stacked"] = u_mat_cpu
+
+                            if u_mat_cpu.size(0) % 3 == 0:
+                                rows = u_mat_cpu.size(0) // 3
+                                entry["q"] = u_mat_cpu[0:rows, :]
+                                entry["k"] = u_mat_cpu[rows:2*rows, :]
+                                entry["v"] = u_mat_cpu[2*rows:3*rows, :]
+                            break
 
                 # scale update
                 adjusted_lr = self.adjust_lr_for_muon(

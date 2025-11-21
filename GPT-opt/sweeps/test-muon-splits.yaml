@@ -1,0 +1,106 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "test-muon-splits"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Muon optimizer with PolarExpress
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate and weight decay (reuse Phase 1 defaults)
+  optimizer_params.args.lr:
+    value: 0.01
+  
+  optimizer_params.args.weight_decay:
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (embeddings, 1D params)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+  
+  # Use PolarExpress for orthogonalization
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+  
+  optimizer_params.args.polar_safety:
+    value: 1.01
+  
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+  
+  # Newton-Schulz steps (Muon internal parameter, still used for non-PE modes)
+  optimizer_params.args.ns_steps:
+    value: 5
+
+  # 2 x 2 grid over Muon application modes
+  #   - muon_mode: stacked_qkv vs split_qkv
+  #   - split_heads: False vs True
+  optimizer_params.args.muon_mode:
+    values: [stacked_qkv, split_qkv]
+
+  optimizer_params.args.split_heads:
+    values: [False, True]
+
+  # Single seed for this structural ablation
+  seed:
+    value: 42
+  
+  # Training parameters (1 epoch = ~1680 steps for gpt-small on fineweb1B)
+  training_data.training_params.num_epochs:
+    value: 1
+  
+  training_data.training_params.batch_size:
+    value: 8
+
+  training_data.training_params.tokens_processed:
+    value: 131072
+  
+  # Logging (reduced frequencies for 1-epoch runs)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+  
+  logging_params.diag_log_step:
+    value: 800
+  
+  logging_params.val_step:
+    value: 3200
+  
+  logging_params.svd_log_step:
+    value: 800
+  
+  logging_params.save_ckpt_step:
+    value: 3200
+  
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+  
+  logging_params.wandb.tags:
+    value: ["test", "muon", "splits", "polarexpress"]
+
+# This sweep creates 4 runs:
+#   (stacked_qkv vs split_qkv) x (split_heads=False vs True)
+# with Muon + PolarExpress on all 2D parameters, single seed.

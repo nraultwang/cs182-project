@@ -6,12 +6,25 @@ defaults:
   - training_data: finewebmini  # Default dataset config
   - _self_                      # Include this file's content
 
+# Global random seed (can be overridden by sweeps)
+seed: 42
+
 # Optimizer configuration
 optimizer_params:
   name: adamw
   args:
     lr: 0.001
     weight_decay: 0.1
+    # Optional parameters (can be overridden by sweeps)
+    betas: null
+    ns_steps: null
+    polar_method: null
+    polar_num_iters: null
+    polar_safety: null
+    polar_cushion: null
+    adamw_betas: null
+    muon_mode: null
+    split_heads: null
 
 # Learning rate schedule
 lr_schedule:
@@ -27,7 +40,8 @@ logging_params:
   load_ckpt_step: 0
   keep_last: 2
   save_checkpoint: true  # Enable by default for long runs
-  svd_log_step: 100
+  diag_log_step: 50
+  svd_log_step: 50
   wandb:
     project: "cs182-polar-express"
     dir: "outputs/wandb"

@@ -1,0 +1,103 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase1-cushion-sweep"
+  
+  # Dataset and model (same as Phase 1)
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer: Muon + PolarExpress (Phase 1 defaults)
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (Phase 1 default)
+  optimizer_params.args.lr:
+    value: 0.01
+  
+  optimizer_params.args.weight_decay:
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (same as Phase 1)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+  
+  # PolarExpress method
+  optimizer_params.args.polar_method:
+    value: polarexpress
+  
+  # Sweep: num_iters patterns {5, 3}
+  optimizer_params.args.polar_num_iters:
+    values:
+      - [5]
+      - [3]
+  
+  # Safety factor (Phase 1 default)
+  optimizer_params.args.polar_safety:
+    value: 1.01
+  
+  # Sweep: cushion values {0.2, 0.23, 0.24, 0.25, 0.3}
+  optimizer_params.args.polar_cushion:
+    values: [0.2, 0.23, 0.24, 0.25, 0.3]
+  
+  # Newton-Schulz steps (Muon parameter)
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Seeds: 3 seeds for statistical robustness
+  seed:
+    values: [42, 123, 456]
+  
+  # Training parameters (1 epoch, same as Phase 1 stage 2)
+  training_data.training_params.num_epochs:
+    value: 1
+  
+  training_data.training_params.batch_size:
+    value: 8
+
+  training_data.training_params.tokens_processed:
+    value: 131072
+  
+  # Logging (same cadence as Phase 1 stage 2)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+  
+  logging_params.diag_log_step:
+    value: 800
+  
+  logging_params.val_step:
+    value: 3200
+  
+  logging_params.svd_log_step:
+    value: 800
+  
+  logging_params.save_ckpt_step:
+    value: 3200
+  
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+  
+  logging_params.wandb.tags:
+    value: ["phase1", "cushion-sweep", "polarexpress"]
+
+# Phase 1 Cushion Sweep:
+#   2 num_iters patterns × 5 cushion values × 3 seeds = 30 runs
+# Purpose: Study interaction of PolarExpress num_iters {3,5} with cushion {0.2–0.3}
+#          at fixed safety=1.01 and lr=0.01, using the Phase 1 training setup.

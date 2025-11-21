@@ -5,6 +5,7 @@ import torch.distributed as dist
 from gptopt.utils import get_worker_info, save_checkpoint, load_checkpoint
 import json
 import numpy as np
+import wandb
 
 typedict = {"float16":torch.float16, "float32":torch.float32, "bfloat16":torch.bfloat16}
 
@@ -35,6 +36,7 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
     with torch.no_grad():
         # E) SVD metrics on sentinel matrices (expensive, only when requested)
         if compute_svd:
+            svd_start_time = time.time()
             # Sample 3 representative matrices: first, middle, last
             svd_targets = [
                 ('h.0.attn.c_attn.weight', 'layer0'),   # First layer attention
@@ -42,23 +44,24 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                 ('h.11.attn.c_attn.weight', 'layer11'), # Last layer attention
             ]
             
-            # Helper function to compute SVD metrics
-            def compute_svd_metrics(matrix, prefix):
-                """Compute SVD metrics for a matrix and store with given prefix."""
-                U, S, Vh = torch.linalg.svd(matrix, full_matrices=False)
-                
-                sigma_max = S[0].item()
-                sigma_min = S[-1].item()
-                condition_number = sigma_max / (sigma_min + 1e-10)
-                effective_rank = (S.sum() / (sigma_max + 1e-10)).item()
-                
-                metrics[f'{prefix}/sigma_max'] = sigma_max
-                metrics[f'{prefix}/sigma_min'] = sigma_min
-                metrics[f'{prefix}/condition_number'] = condition_number
-                metrics[f'{prefix}/effective_rank'] = effective_rank
-                
-                if len(S) > 1:
-                    metrics[f'{prefix}/spectral_gap'] = (S[0] / S[1]).item()
+            def log_hist(category: str, layer_label: str, part: str, matrix: torch.Tensor):
+                """Compute singular values and log as histogram for the given category."""
+                tensor = matrix
+                if tensor.ndim > 2:
+                    tensor = tensor.view(tensor.size(0), -1)
+                try:
+                    svals = torch.linalg.svdvals(tensor)
+                except RuntimeError:
+                    svals = torch.linalg.svdvals(tensor.cpu()).to(tensor.device)
+
+                # Linear-scale histogram (kept for backward compatibility)
+                key_linear = f'svd/{category}/{layer_label}/{part}'
+                metrics[key_linear] = wandb.Histogram(svals.detach().float().cpu().numpy())
+
+                # Log10-scale histogram for finer-grained analysis over training
+                log_svals = torch.log10(svals.clamp_min(1e-12))
+                key_log = f'svd_log/{category}/{layer_label}/{part}'
+                metrics[key_log] = wandb.Histogram(log_svals.detach().float().cpu().numpy())
             
             for target_name, layer_label in svd_targets:
                 try:
@@ -73,17 +76,16 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                             # Split QKV weight matrix into Q, K, V (each 768 × 768)
                             # c_attn.weight is [2304, 768] = [Q; K; V] stacked vertically
                             if W.size(0) == 2304 and W.size(1) == 768:
-                                Q = W[0:768, :]      # First 768 rows
-                                K = W[768:1536, :]   # Middle 768 rows
-                                V = W[1536:2304, :]  # Last 768 rows
-                                
-                                # Compute SVD for each projection
-                                compute_svd_metrics(Q, f'svd/{layer_label}_q')
-                                compute_svd_metrics(K, f'svd/{layer_label}_k')
-                                compute_svd_metrics(V, f'svd/{layer_label}_v')
+                                Q = W[0:768, :]
+                                K = W[768:1536, :]
+                                V = W[1536:2304, :]
+
+                                log_hist('weights', layer_label, 'q', Q)
+                                log_hist('weights', layer_label, 'k', K)
+                                log_hist('weights', layer_label, 'v', V)
+                                log_hist('weights', layer_label, 'stacked', W)
                             else:
-                                # Fallback: compute on full matrix if not standard QKV shape
-                                compute_svd_metrics(W, f'svd/{layer_label}_qkv')
+                                log_hist('weights', layer_label, 'stacked', W)
                             
                             break  # Found the target, move to next
                 except Exception as e:
@@ -121,30 +123,31 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                                             # Note: Even though PE processes stacked (2304×768) when split_heads=False,
                                             # we still want to measure per-projection conditioning for analysis
                                             if buf.size(0) == 2304 and buf.size(1) == 768:
-                                                Q_buf = buf[0:768, :]      # Q update
-                                                K_buf = buf[768:1536, :]   # K update
-                                                V_buf = buf[1536:2304, :]  # V update
-                                                
-                                                # Compute SVD for each update projection
-                                                compute_svd_metrics(Q_buf, f'svd/update_{layer_label}_q')
-                                                compute_svd_metrics(K_buf, f'svd/update_{layer_label}_k')
-                                                compute_svd_metrics(V_buf, f'svd/update_{layer_label}_v')
-                                                
-                                                # Also compute on full stacked buffer (what PE actually sees)
-                                                compute_svd_metrics(buf, f'svd/update_{layer_label}_stacked')
+                                                Q_buf = buf[0:768, :]
+                                                K_buf = buf[768:1536, :]
+                                                V_buf = buf[1536:2304, :]
+
+                                                log_hist('pre_update', layer_label, 'q', Q_buf)
+                                                log_hist('pre_update', layer_label, 'k', K_buf)
+                                                log_hist('pre_update', layer_label, 'v', V_buf)
+                                                log_hist('pre_update', layer_label, 'stacked', buf)
                                             else:
-                                                # Fallback: compute on full buffer
-                                                compute_svd_metrics(buf, f'svd/update_{layer_label}')
+                                                log_hist('pre_update', layer_label, 'stacked', buf)
                                         
                                         break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute SVD for momentum buffers: {e}")
+
+            # Post-PE update histograms (at every SVD diagnostic step),
+            # using the latest cached post-PE update matrices from Muon.
+            if hasattr(optimizer, '_pe_last_update_mats') and optimizer._pe_last_update_mats:
+                for layer_key, parts in optimizer._pe_last_update_mats.items():
+                    for part_name, mat in parts.items():
+                        log_hist('post_update', layer_key, part_name, mat)
             
             # Compute weight orthogonality: ||W^T W - I||_F
             # This measures if weights maintain orthogonality over training
             def compute_orthogonality(matrix, prefix):
-                """Compute orthogonality error for a matrix."""
-                # For non-square matrices, compute W^T W (smaller dimension)
                 if matrix.size(0) > matrix.size(1):
                     WTW = matrix.T @ matrix  # cols × cols
                 else:
@@ -183,6 +186,10 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                             break  # Found the target, move to next
                 except Exception as e:
                     print(f"Warning: Could not compute orthogonality for {layer_label}: {e}")
+            
+            # Log total SVD computation time
+            svd_total_time = (time.time() - svd_start_time) * 1000  # Convert to ms
+            metrics['svd/total_time_ms'] = svd_total_time
     
     with torch.no_grad():
         # C) Attention health - sample from first, middle, and last layers
@@ -374,6 +381,9 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
         pass_loss = False
     if master_process: print(f"Set pass_loss to {pass_loss} for optimizer {optimizer_name}")
 
+    # Track total training time for this run
+    training_start_time = time.time()
+    
     autocast_ctxt = contextlib.nullcontext()
     if training_params['autocast']:
         autocast_ctxt = torch.autocast(device_type=device, dtype=typedict[training_params['mixed_precision']])     
@@ -397,6 +407,37 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
     max_optimizer_steps = total_iterations
     max_microsteps = max_optimizer_steps * grad_accum_steps
     if master_process: print(f"Training for {num_epochs} epochs = {max_optimizer_steps} optimizer steps = {max_microsteps} micro-steps")
+
+    # Prepare custom checkpoint schedule (fractions of total micro-steps)
+    ckpt_schedule_fracs = logging_params.get('ckpt_schedule', [])
+    scheduled_ckpt_microsteps = []
+    if ckpt_schedule_fracs:
+        try:
+            fracs_sorted = sorted(set(float(f) for f in ckpt_schedule_fracs))
+        except Exception:
+            fracs_sorted = []
+        for frac in fracs_sorted:
+            frac = max(0.0, min(1.0, frac))
+            micro = int(round(frac * max_microsteps))
+            micro = max(1, micro)
+            micro = min(max_microsteps, micro)
+            scheduled_ckpt_microsteps.append(micro)
+
+    saved_ckpt_steps = set()
+
+    def should_save_periodic(step_value: int) -> bool:
+        interval = logging_params.get('save_ckpt_step', 0)
+        return interval and interval > 0 and (step_value % interval == 0)
+
+    def save_ckpt(step_value: int):
+        if ckpt_dir == "" or step_value in saved_ckpt_steps:
+            return
+        save_checkpoint(ckpt_dir, step_value, model, optimizer, loss_accum.item(),
+                        train_dataloader, scheduler, logging_params['keep_last'])
+        if master_process:
+            with open(ckpt_dir + '/log.json', 'w') as file:
+                json.dump(logger.__dict__, file)
+        saved_ckpt_steps.add(step_value)
 
     load_ckpt_step = logging_params['load_ckpt_step']
     if load_ckpt_step != 0:
@@ -450,9 +491,13 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                 # Compute tokens per second
                 tps = training_params["tokens_processed"] / step_time
                 
-                # Only log to wandb at log_step frequency to reduce overhead
-                if master_process and wandb_run is not None and (step % logging_params['log_step'] == 0):
-                    # A) End-to-end metrics (at log_step frequency)
+                # Separate logging frequencies for different metric types
+                log_step = logging_params.get('log_step', 160)
+                diag_log_step = logging_params.get('diag_log_step', 160)  # PE, attention, scales (default: every 10 steps)
+                svd_log_step = logging_params.get('svd_log_step', 800)    # SVD only (default: every 50 steps)
+                
+                # A) End-to-end metrics (at log_step frequency)
+                if master_process and wandb_run is not None and (step % log_step == 0):
                     wandb_log_dict = {
                         "train/loss": loss_accum.item(), 
                         "train/grad_norm": norm.item(),
@@ -468,8 +513,8 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     else:
                         wandb_log_dict["train/naninf_flag"] = 0.0
                     
-                    # Amplitude check (every 10 steps or if NaN detected)
-                    if step % 10 == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
+                    # Amplitude check (at log_step frequency or if NaN detected for immediate alarm)
+                    if step % log_step == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
                         grad_list = [p.grad.abs().max().item() for p in model.parameters() if p.grad is not None]
                         if grad_list:  # Only compute if gradients exist
                             max_grad = max(grad_list)
@@ -481,30 +526,61 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     for param_group_ix, param_group in enumerate(optimizer.param_groups):
                         wandb_log_dict[f"train/lr_{param_group_ix}"] = param_group['lr']
                     
-                    # B) PE-internal metrics (at svd_log_step frequency)
-                    svd_log_step = logging_params.get('svd_log_step', 1600)
-                    if step % svd_log_step == 0:
-                        # Log orthogonality before PE (input gradient quality)
-                        if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
-                            wandb_log_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])  # Average last 10
-                        # Log orthogonality after PE (output quality)
-                        if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
-                            wandb_log_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])  # Average last 10
-                        # Log PE execution time
-                        if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
-                            wandb_log_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
-                    
-                    # C) & D) Attention health and light scales (at svd_log_step frequency)
-                    if step % svd_log_step == 0:
-                        try:
-                            # Always compute SVD when we're logging advanced metrics
-                            compute_svd = True
-                            advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=compute_svd)
-                            wandb_log_dict.update(advanced_metrics)
-                        except Exception as e:
-                            print(f"Warning: Could not compute advanced metrics at step {step}: {e}")
-                    
                     wandb_run.log(wandb_log_dict)
+                
+                # B) PE-internal metrics + C) Attention health + D) Weight/Scale metrics (at diag_log_step frequency)
+                if master_process and wandb_run is not None and (step % diag_log_step == 0):
+                    wandb_diag_dict = {}
+                    
+                    # PE metrics
+                    if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
+                        wandb_diag_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])
+                    if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
+                        wandb_diag_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])
+                    if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
+                        # pe/time_ms reflects the average PE iteration time over the most recent window
+                        wandb_diag_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
+                    
+                    # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
+                    if hasattr(optimizer, '_pe_ortho_errs_before_per_layer'):
+                        for layer_key, errs in optimizer._pe_ortho_errs_before_per_layer.items():
+                            if len(errs) > 0:
+                                wandb_diag_dict[f"ortho_err_before/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
+                    if hasattr(optimizer, '_pe_ortho_errs_after_per_layer'):
+                        for layer_key, errs in optimizer._pe_ortho_errs_after_per_layer.items():
+                            if len(errs) > 0:
+                                wandb_diag_dict[f"ortho_err_after/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
+
+                    # Per-layer post-PE SVD metrics (condition number, sigma_max/min, effective_rank, spectral_gap)
+                    # Attention health and weight scales (compute_svd=False to skip expensive SVD)
+                    try:
+                        advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=False)
+                        wandb_diag_dict.update(advanced_metrics)
+                    except Exception as e:
+                        print(f"Warning: Could not compute diagnostic metrics at step {step}: {e}")
+                    
+                    if wandb_diag_dict:
+                        wandb_run.log(wandb_diag_dict)
+                
+                # E) SVD-based metrics (at svd_log_step frequency - expensive, keep at 50 steps)
+                # NOTE: We explicitly ignore any PE timings that may occur inside SVD diagnostics,
+                # so that pe/time_ms only reflects the cost of the PE call during the main optimizer step.
+                if master_process and wandb_run is not None and (step % svd_log_step == 0):
+                    # Cache current length of PE timing list (if present)
+                    pe_times_len_before = None
+                    if hasattr(optimizer, "_pe_times") and optimizer._pe_times is not None:
+                        pe_times_len_before = len(optimizer._pe_times)
+
+                    try:
+                        # Expensive SVD computation
+                        advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=True)
+                        wandb_run.log(advanced_metrics)
+                    except Exception as e:
+                        print(f"Warning: Could not compute SVD metrics at step {step}: {e}")
+                    finally:
+                        # Remove any PE timing entries that may have been added during SVD diagnostics
+                        if pe_times_len_before is not None and hasattr(optimizer, "_pe_times") and optimizer._pe_times is not None:
+                            optimizer._pe_times = optimizer._pe_times[:pe_times_len_before]
                 logger.step_times.append(step_time)  # Are these different across ranks?
                 logger.grad_norms.append(norm.item())
                 for param_group in optimizer.param_groups:
@@ -528,13 +604,14 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                         })
                     logger.val_losses.append(val_loss.item())
 
-                if (step % logging_params['save_ckpt_step'] == 0) & (ckpt_dir != ""):
-                    save_checkpoint(ckpt_dir, step, model, optimizer, loss_accum.item(),
-                                    train_dataloader, scheduler, logging_params['keep_last'])
-                    
-                    if master_process:
-                        with open(ckpt_dir + '/log.json', 'w') as file:
-                            json.dump(logger.__dict__, file)
+                if ckpt_dir != "":
+                    pending_micro = global_microstep + 1
+                    if should_save_periodic(step):
+                        save_ckpt(step)
+                    while (scheduled_ckpt_microsteps and
+                           pending_micro >= scheduled_ckpt_microsteps[0]):
+                        save_ckpt(step)
+                        scheduled_ckpt_microsteps.pop(0)
                 loss_accum = 0.
                 start_time = time.time()
             
@@ -567,4 +644,14 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
 
     if hasattr(optimizer, 'step_size_list'):      # Check if optimizer has a step_size_list attribute
         logger.step_size_list = optimizer.step_size_list  
+    
+    # Log total training time to W&B
+    if master_process and wandb_run is not None:
+        total_training_time = time.time() - training_start_time
+        wandb_run.log({
+            "train/total_time_seconds": total_training_time,
+            "train/total_time_hours": total_training_time / 3600,
+        })
+        print(f"Total training time: {total_training_time:.1f} seconds ({total_training_time/3600:.2f} hours)")
+    
     return logger

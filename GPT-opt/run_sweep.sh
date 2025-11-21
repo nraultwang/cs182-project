@@ -26,6 +26,13 @@ echo "Starting agents for sweep: $SWEEP_ID"
 export DATA_DIR=~/data/huggingface/
 echo "Using DATA_DIR: $DATA_DIR"
 
+# Unset distributed training environment variables to ensure single-GPU mode
+unset RANK
+unset WORLD_SIZE
+unset LOCAL_RANK
+unset MASTER_ADDR
+unset MASTER_PORT
+
 # Create log directory if it doesn't exist
 mkdir -p logs
 
@@ -38,16 +45,16 @@ if [ $NUM_GPUS -ge 2 ]; then
   
   # Launch agent for GPU 0 in the background
   echo "Starting agent 1 on GPU 0. Log at logs/gpu_0.log"
-  CUDA_VISIBLE_DEVICES=0 MASTER_PORT=29500 wandb agent $SWEEP_ID > logs/gpu_0.log 2>&1 &
+  CUDA_VISIBLE_DEVICES=0 MASTER_PORT=29500 wandb agent "$SWEEP_ID" > logs/gpu_0.log 2>&1 &
   
   # Launch agent for GPU 1 in the background
   echo "Starting agent 2 on GPU 1. Log at logs/gpu_1.log"
-  CUDA_VISIBLE_DEVICES=1 MASTER_PORT=29501 wandb agent $SWEEP_ID > logs/gpu_1.log 2>&1 &
+  CUDA_VISIBLE_DEVICES=1 MASTER_PORT=29501 wandb agent "$SWEEP_ID" > logs/gpu_1.log 2>&1 &
   
   echo "Agents started in background. Tailing logs."
   echo "Press Ctrl+C to stop tailing (agents will continue to run)."
   tail -f logs/gpu_0.log logs/gpu_1.log
 else
   echo "Only 1 GPU detected. Launching single agent."
-  CUDA_VISIBLE_DEVICES=0 MASTER_PORT=29500 wandb agent $SWEEP_ID
+  CUDA_VISIBLE_DEVICES=0 MASTER_PORT=29500 wandb agent "$SWEEP_ID"
 fi

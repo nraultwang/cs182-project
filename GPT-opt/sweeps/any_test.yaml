@@ -12,76 +12,78 @@ command:
   - ${args_no_hyphens}
 
 parameters:
-  # Base configuration
   hydra.job.name:
-    value: "phase0-muon"
-  
+    value: "phase1-safety-sweep-test"
+
   # Dataset and model
   training_data:
     value: fineweb1B
-  
+
   gpt_model:
     value: gpt-small
-  
-  # Muon optimizer
+
+  # Optimizer
   optimizer_params.name:
     value: muon
-  
-  # Muon learning rates (typically ~10x higher than AdamW)
+
   optimizer_params.args.lr:
-    values: [0.001, 0.01, 0.02, 0.04, 0.1]
-  
+    value: 0.01
+
   optimizer_params.args.weight_decay:
-    values: [0.01, 0.1]
-  
-  # Muon-specific: PolarExpress settings (paper defaults)
+    value: 0.01
+
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+
   optimizer_params.args.polar_method:
     value: polarexpress
-  
+
   optimizer_params.args.polar_num_iters:
-    value: 5
-  
+    value: [5]
+
   optimizer_params.args.polar_safety:
     value: 1.01
-  
+
   optimizer_params.args.polar_cushion:
     value: 0.024
-  
+
   optimizer_params.args.ns_steps:
     value: 5
-  
-  # AdamW betas for backup optimizer (embeddings, 1D params)
-  optimizer_params.args.adamw_betas:
-    values: [[0.9, 0.999], [0.95, 0.999], [0.95, 0.95]]
-  
-  # Shorter training for baseline validation (0.2 epochs for fast LR search)
+
+  # Short validation run: single seed, 0.2 epochs to inspect SVD histograms
+  seed:
+    value: 42
+
   training_data.training_params.num_epochs:
     value: 0.2
-  
+
   training_data.training_params.tokens_processed:
     value: 524288
-  
-  # Logging (adjusted for gradient accumulation=16)
-  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 1600=100 opt steps
+
+  # Keep default logging cadence so histograms mimic full runs
   logging_params.log_step:
     value: 160
-  
+
   logging_params.diag_log_step:
-    value: 160
-  
+    value: 800
+
   logging_params.val_step:
-    value: 8000
-  
+    value: 3200
+
   logging_params.svd_log_step:
     value: 800
-  
-  logging_params.save_ckpt_step:
-    value: 32000
-  
-  logging_params.wandb.project:
-    value: "cs182-polar-express"
-  
-  logging_params.wandb.tags:
-    value: ["phase0", "baseline", "muon"]
 
-# This creates: 3 LRs × 2 weight_decays × 3 adamw_betas = 18 Muon runs
+  logging_params.save_ckpt_step:
+    value: 6400
+
+  logging_params.keep_last:
+    value: 4
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["phase1", "stage1", "safety-sweep", "svd-test"]
+
+# This sweep launches 2 safety configs × 1 seed × 0.2 epochs (~40 minutes per run)
+# Run a single wandb agent on one GPU to validate the new SVD histogram logging.

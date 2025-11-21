@@ -1,0 +1,88 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "test-muon-ns"
+  
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+  
+  gpt_model:
+    value: gpt-small
+  
+  # Optimizer base
+  optimizer_params.name:
+    value: muon
+  
+  # Learning rate (same as Phase 1)
+  optimizer_params.args.lr:
+    value: 0.01
+  
+  optimizer_params.args.weight_decay:
+    value: 0.01
+  
+  # AdamW betas for backup optimizer (same as Phase 1)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+  
+  # Newton-Schulz method (NOT PolarExpress)
+  optimizer_params.args.polar_method:
+    value: Keller
+  
+  # Newton-Schulz steps
+  optimizer_params.args.ns_steps:
+    value: 5
+  
+  # Random seeds for reproducibility (3 seeds)
+  seed:
+    values: [42, 123, 456]
+  
+  # Training parameters (1 epoch = ~1680 steps)
+  training_data.training_params.num_epochs:
+    value: 1
+  
+  training_data.training_params.batch_size:
+    value: 8
+
+  training_data.training_params.tokens_processed:
+    value: 131072
+  
+  # Logging (reduced frequencies for 1-epoch runs)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+  
+  logging_params.diag_log_step:
+    value: 800
+  
+  logging_params.val_step:
+    value: 3200
+  
+  logging_params.svd_log_step:
+    value: 800
+  
+  logging_params.save_ckpt_step:
+    value: 3200
+  
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+  
+  logging_params.wandb.tags:
+    value: ["test", "newton-schulz", "baseline"]
+
+# This creates: 3 seeds = 3 runs
+# Purpose: Baseline comparison with Newton-Schulz (Keller method) vs PolarExpress
+#
