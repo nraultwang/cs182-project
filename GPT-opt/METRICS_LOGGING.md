@@ -25,7 +25,7 @@ This document describes all metrics logged during training, organized by categor
 
 ## Quick Summary
 
-**Total Metrics: ~150** across 6 categories, automatically logged to W&B
+**Total Metrics: ~181** across 6 categories, automatically logged to W&B
 
 | Category | Purpose | Count | Frequency | Phase 0 | Phase 1 | Overhead |
 |----------|---------|-------|-----------|---------|---------|----------|
@@ -33,9 +33,9 @@ This document describes all metrics logged during training, organized by categor
 | **PolarExpress** | Optimizer health (if using PE) | 3 | Every diag_log_step (10 steps) | 38 evt | 191 evt | <0.001% |
 | **Attention Health** | Catch head collapse across depth | 21 | Every diag_log_step (10 steps) | 38 evt | 191 evt | 0.004% |
 | **Weight & Gradient Scales** | Localize gradient/scale issues | 22 | Every diag_log_step (10 steps) | 38 evt | 191 evt | 0.002% |
-| **SVD + Orthogonality** | Per-projection conditioning analysis | ~91 | Every svd_log_step (50 steps) | 0 evt | 38 evt | **0.029%** |
+| **SVD + Orthogonality** | Per-projection conditioning analysis | 123 | Every svd_log_step (50 steps) | 0 evt | 38 evt | **0.029%** |
 | **Stability Alarms** | Critical failure detection | 4 | Every 1-10 steps | 381 | 1,907 | <0.001% |
-| **PHASE TOTAL** | — | **149** | — | **0.003%** | **0.035%** | — |
+| **PHASE TOTAL** | — | **181** | — | **0.003%** | **0.035%** | — |
 
 **Three Independent Logging Frequencies:**
 - **log_step (160 microsteps)**: End-to-end metrics only (cheap)
@@ -193,32 +193,48 @@ This document describes all metrics logged during training, organized by categor
 
 **Tracked Layers:** 0 (first), 5 (middle), 11 (last) - sampled for efficiency
 
-### Singular Value Histograms (Weights, Updates, Post-PE)
+### Weight Matrix SVD - Per Layer, Per Projection
+| Metric | Description | Good Range | Alerts |
+|--------|-------------|------------|---------|
+| `svd/layer{0,5,11}_{q,k,v}/sigma_max` | Largest singular value per projection | Stable over time | Sudden spikes |
+| `svd/layer{0,5,11}_{q,k,v}/sigma_min` | Smallest singular value per projection | > 1e-6 | < 1e-8 (rank deficient) |
+| `svd/layer{0,5,11}_{q,k,v}/condition_number` | σ_max / σ_min per projection | < 1000 | > 10000 (ill-conditioned) |
+| `svd/layer{0,5,11}_{q,k,v}/effective_rank` | Effective rank per projection | 50-90% of full rank | Dropping over time |
+| `svd/layer{0,5,11}_{q,k,v}/spectral_gap` | σ_1 / σ_2 per projection | 2-10 | > 100 (low rank) |
 
-At each `svd_log_step`, we compute singular values for a small set of **sentinel matrices** and log
-them as **W&B histograms**, not as separate scalar metrics:
+**Weight Health Indicators:**
+- **Per-projection analysis**: Q, K, V computed separately (each 768×768)
+  - Enables diagnosis of which projection is problematic
+  - V often degrades faster than Q/K in practice
+- **Condition number**: Measures numerical stability of weight matrix
+  - High values (> 10000) = matrix nearly singular, optimization difficulty
+  - Shows long-term accumulation of conditioning issues
+- **Effective rank**: How many "directions" the weight matrix uses
+  - Dropping rank = loss of expressivity
+  - Could indicate weight collapse or over-regularization
 
-| Metric prefix | Description |
-|---------------|-------------|
-| `svd/weights/layer{0,5,11}/{q,k,v,stacked}` | Histogram of singular values of attention Q/K/V and stacked QKV weight matrices. |
-| `svd/pre_update/layer{0,5,11}/{q,k,v,stacked}` | Histogram of singular values of Muon momentum/update buffers before PE (if `use_muon=True`). |
-| `svd/post_update/layer{0,5,11}/{q,k,v,stacked}` | Histogram of singular values of post-PE updates cached from the optimizer (if available). |
-| `svd_log/weights/layer{0,5,11}/{q,k,v,stacked}` | Same as `svd/weights/...` but with **log10(σ)** applied elementwise. |
-| `svd_log/pre_update/layer{0,5,11}/{q,k,v,stacked}` | Log10-scale histograms of pre-PE updates. |
-| `svd_log/post_update/layer{0,5,11}/{q,k,v,stacked}` | Log10-scale histograms of post-PE updates. |
-| `svd/total_time_ms` | Wall-clock time (ms) spent computing all SVD metrics at the current event. |
+### Update/Momentum Buffer SVD - Per Layer, Per Projection (Muon only)
+| Metric | Description | Good Range | Alerts |
+|--------|-------------|------------|---------|
+| `svd/update_layer{0,5,11}_{q,k,v}/sigma_max` | Largest singular value of update per projection | Stable | Sudden spikes |
+| `svd/update_layer{0,5,11}_{q,k,v}/sigma_min` | Smallest singular value of update per projection | > 1e-6 | < 1e-8 (rank deficient) |
+| `svd/update_layer{0,5,11}_{q,k,v}/condition_number` | σ_max / σ_min of update per projection | < 100 | > 1000 (ill-conditioned) |
+| `svd/update_layer{0,5,11}_{q,k,v}/effective_rank` | Effective rank of update per projection | 50-90% of full rank | Dropping |
+| `svd/update_layer{0,5,11}_{q,k,v}/spectral_gap` | σ_1 / σ_2 of update per projection | 2-10 | > 100 (low rank) |
+| `svd/update_layer{0,5,11}_stacked/*` | SVD metrics on full stacked buffer (2304×768) | Same as above | Same as above |
 
-**Conventions:**
-- `layer{0,5,11}` corresponds to the sentinel transformer blocks (first/middle/last).
-- `{q,k,v,stacked}` refer to splitting the standard GPT-2 `c_attn` weight of shape `[2304, 768]`
-  into three 768×768 blocks (Q, K, V) and the full stacked matrix (stacked QKV).
-- Using `svd_log/*` in W&B **Distributions** views gives a clear picture of how the
-  singular value distribution evolves over training on a log scale.
-
-**How to use in W&B:**
-- Plot `svd_log/weights/layer0/q` (or any other prefix) in the Distributions panel.
-- Enable "Show as 2D" / "distribution over time" to see **step × log σ** density.
-- Compare weights vs pre/post-update distributions to see how PE affects conditioning.
+**Update Health Indicators (CRITICAL FOR POLAREXPRESS EVALUATION):**
+- **Split vs Stacked**: 
+  - Split (Q/K/V): Shows per-projection update quality for analysis
+  - Stacked: What PE actually processes when `split_heads=False` (default)
+  - Both tracked for complete picture
+- **Update condition number**: **Directly measures what PE is supposed to improve**
+  - This is the momentum buffer that PolarExpress orthogonalizes
+  - Lower values = better-conditioned optimization steps
+  - Compare across PE configurations to find optimal hyperparameters
+- **Update effective rank**: Whether optimizer is making diverse steps
+  - Low rank updates = optimizer stuck in low-dimensional subspace
+  - PE should help maintain full-rank updates
 
 ### Weight Orthogonality - Per Layer, Per Projection
 | Metric | Description | Good Range | Alerts |
@@ -244,9 +260,13 @@ them as **W&B histograms**, not as separate scalar metrics:
 - Low both = PE successfully maintains long-term orthogonality
 - High both = PE not working well (check hyperparameters)
 
-**Total volume:** Dozens of SVD histogram series (weights, pre-update, post-update, linear + log10)
-plus 18 orthogonality scalars. All are computed every `svd_log_step` (default: 800 micro-steps ≈ 50
-optimizer steps), with total SVD + orthogonality overhead of ~140ms per event.
+**Total:** 60 SVD + orthogonality metrics:
+- Weight SVD: 5 metrics × 3 projections (Q/K/V) × 3 layers = 45
+- Update SVD: 5 metrics × 4 matrices (Q/K/V/stacked) × 3 layers = 60
+- Orthogonality: 2 metrics × 3 projections × 3 layers = 18
+- **Grand total: 123 metrics** (but only computed every 500 steps)
+
+**Note:** SVD + orthogonality computed every 50 steps (~140ms total overhead per computation)
 
 ## F) Numeric Stability Alarms (Every Step)
 
@@ -281,14 +301,6 @@ grads/*_norm
 attn/maxA/frac>0.95
 ```
 
-### Optional Panel: Weight Conditioning Snapshots (from SVD histograms)
-```
-svd_log/weights/layer0/stacked
-svd_log/weights/layer5/stacked
-svd_log/weights/layer11/stacked
-ortho/layer0_q/err  ortho/layer5_q/err  ortho/layer11_q/err
-```
-
 ## Frequency Summary
 
 | Frequency | Metrics | Phase 0 Events | Phase 1 Events | Cost/Event | Phase 0 Total | Phase 1 Total | Phase 0 % | Phase 1 % |
@@ -297,7 +309,7 @@ ortho/layer0_q/err  ortho/layer5_q/err  ortho/layer11_q/err
 | **diag_log_step=160** (10 steps) | pe/*, logits/*, attn/*, qkv/*, grads/*, weights/* | 38 | 191 | 0.8ms | ~30ms | ~150ms | 0.003% | **0.0083%** |
 | **svd_log_step=800** (50 steps) | svd/*, ortho/* | 0 | 38 | 140ms | 0ms | **~5,320ms** | 0% | **0.029%** |
 | **Every step** | train/grad_norm, train/amp_* | 381 | 1,907 | 0.1ms | ~38ms | ~200ms | 0.003% | 0.001% |
-| **TOTAL OVERHEAD** | **~150 metrics** | — | — | — | **~72ms** | **~5,685ms** | **0.006%** | **0.031%** |
+| **TOTAL OVERHEAD** | **~181 metrics** | — | — | — | **~72ms** | **~5,685ms** | **0.006%** | **0.031%** |
 
 **Key Change from Previous Config:**
 - Old: All diagnostics (PE, attention, scales) at svd_log_step (50 steps) → 38 events
@@ -342,7 +354,7 @@ ortho/layer0_q/err  ortho/layer5_q/err  ortho/layer11_q/err
          training_params, logging_params, wandb_run=wandb_run)
    ```
 
-3. **All metrics described above are automatically logged** with no additional configuration:
+3. **All 76 metrics are automatically logged** with no additional configuration:
    - Every step: loss, grad_norm, lr, TPS, stability alarms
    - Every 10 steps: AMP scaler/overflows
    - Every 100 steps: PE metrics, attention health, QKV norms, weight scales, gradients
@@ -418,7 +430,7 @@ Following LLM training best practices:
 2. Check `train/amp_overflows` - gradient explosion?
 3. Check `logits/layer*/std` - attention logits too large in any layer?
 4. Check `grads/layer*_norm` - which layer's gradients exploded first?
-5. Inspect `svd_log/weights/layer*/stacked` histograms - mass drifting to extreme log σ values (very large or very small) indicates ill-conditioned weights.
+5. Check `svd/layer*/condition_number` - weight matrices ill-conditioned?
 6. **Solution:** Reduce LR, increase grad clipping, adjust PE safety factor, or lower `polar_num_iters`
 
 ### Issue: Model not learning (loss plateau)
@@ -426,7 +438,7 @@ Following LLM training best practices:
 2. Check `attn/layer*/entropy/mean` - attention collapsed in any layer?
 3. Check `pe/ortho_err_after` - PE working correctly? Compare to `pe/ortho_err_before` for improvement.
 4. Check `grads/layer0_norm` - gradients reaching early layers?
-5. Inspect `svd_log/weights/layer*/stacked` histograms - collapsing spectrum (most mass concentrated in a few bins) can indicate loss of rank.
+5. Check `svd/layer*/effective_rank` - weight matrices losing rank?
 6. **Solution:** Adjust LR schedule, check data, verify PE coefficients, increase model capacity
 
 ### Issue: Slow training
@@ -444,12 +456,13 @@ Following LLM training best practices:
 ### Issue: Gradients vanishing in early layers
 1. Check `grads/layer0_norm` vs `grads/layer11_norm` - ratio should be ~0.01-0.1
 2. Check `grads/W0_norm`, `grads/WQ_norm` - which subpath affected?
-3. Inspect `svd_log/weights/layer0/stacked` - highly skewed or degenerate singular value distributions can correlate with vanishing gradients.
+3. Check `svd/layer0/condition_number` - early layer weights ill-conditioned?
 4. **Solution:** Increase LR for early layers (layer-wise LR), use skip connections, verify PE is helping
 
 ### Issue: Weights becoming ill-conditioned
-1. Inspect `svd_log/weights/layer*/stacked` histograms - which layers have very wide log σ spread or most mass near extreme bins?
-2. Check `pe/ortho_err_after` and `ortho/layer*/err` - PE failing to orthogonalize? Is gap from `pe/ortho_err_before` small while `ortho/layer*/err` remains high?
+1. Check `svd/layer*/condition_number` - which layers > 10000?
+2. Check `svd/layer*/effective_rank` - rank collapsing?
+3. Check `pe/ortho_err_after` - PE failing to orthogonalize? Is gap from `pe/ortho_err_before` small?
 4. **Solution:** Adjust PE parameters (safety, cushion), add weight decay, reduce LR
 
 ## Configuration

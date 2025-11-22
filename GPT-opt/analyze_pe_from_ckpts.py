@@ -3,12 +3,13 @@
 # how the SAME update evolves across PE iterations (iter curves on one plot).
 #
 # Usage:
-#   python analyze_pe_from_ckpts.py \
-#       --ckpt_glob "outputs/phase1/*/ckpt*.pth" \
-#       --project your-wandb-project \
-#       --run_name pe-offline-analysis \
-#       --entity your-wandb-entity \
-#       --device cuda
+# python analyze_pe_from_ckpts.py \
+#  --ckpt_glob "outputs/[date-mapped-from-wandb-run-id]/[time-mapped-from-wandb-run-id]/checkpoints/ckpt*.pth" \
+#  --project cs182-polar-express \
+#  --entity justin_yang-university-of-california-berkeley \
+#  --run_name pe-offline-update-analysis \
+#  --device cuda \
+#  --wandb_run_id [wandb run id]
 #
 # In W&B:
 #   - Add a Line Plot with source = pe_offline/iter_curves

@@ -308,13 +308,17 @@ class Muon(torch.optim.Optimizer):
                 
                 # Mode-specific gradient preprocessing
                 if self.muon_mode == "split_qkv" and is_qkv:
-                    # Mode 2: Split QKV into Q, K, V and apply Muon to each separately
+                    # Mode 2: Split QKV into Q, K, V. Per-head splitting is controlled by split_heads.
                     old_shape = g.shape
-                    # Split into Q, K, V (each is [n_embd, n_embd])
+                    # Original stacked shape is [3 * n_embd, n_embd]
                     n_embd = g.shape[1]
-                    head_dim = n_embd // self.nheads
-                    # Reshape to [3, nheads, head_dim, n_embd]
-                    g = g.reshape(3, self.nheads, head_dim, n_embd)
+                    if self.split_heads:
+                        # Per-head: reshape to [3, nheads, head_dim, n_embd]
+                        head_dim = n_embd // self.nheads
+                        g = g.reshape(3, self.nheads, head_dim, n_embd)
+                    else:
+                        # No head splitting: reshape to [3, n_embd, n_embd]
+                        g = g.reshape(3, n_embd, n_embd)
                     qkv_split_indices = (0, 1, 2)  # Process Q, K, V separately
                     
                 elif self.muon_mode == "voh_only" and is_qkv:
@@ -322,11 +326,15 @@ class Muon(torch.optim.Optimizer):
                     # Extract only V from the gradient (last third)
                     old_shape = g.shape
                     n_embd = g.shape[1]
-                    head_dim = n_embd // self.nheads
                     # Get only V part: g[2*n_embd:, :]
                     g_v = g[2*n_embd:, :]
+                    head_dim = n_embd // self.nheads
                     # Reshape V to [nheads, head_dim, n_embd] for per-head Muon
-                    g = g_v.reshape(self.nheads, head_dim, n_embd)
+                    if self.split_heads:
+                        g = g_v.reshape(self.nheads, head_dim, n_embd)
+                    else:
+                        # No head splitting: treat V as a single [n_embd, n_embd] matrix
+                        g = g_v
                     qkv_split_indices = (2,)  # Only V
                     
                 elif self.split_heads and is_qkv:
@@ -334,8 +342,8 @@ class Muon(torch.optim.Optimizer):
                     old_shape = g.shape
                     g = g.reshape(3 * self.nheads, g.shape[0] // (3 * self.nheads), g.shape[1])
                     
-                elif (self.muon_mode == "split_qkv" or self.split_heads) and is_wo:
-                    # Split W_O by heads
+                elif self.split_heads and is_wo:
+                    # Split W_O by heads (independent of muon_mode)
                     old_shape = g.shape
                     n_embd = g.shape[0]
                     head_dim = g.shape[1] // self.nheads
@@ -450,7 +458,7 @@ class Muon(torch.optim.Optimizer):
                 # Reshape back to original shape after polar factorization
                 if old_shape is not None:
                     if self.muon_mode == "split_qkv" and is_qkv:
-                        # Reshape back from [3, nheads, head_dim, n_embd] to [3*n_embd, n_embd]
+                        # Reshape back from either [3, n_embd, n_embd] or [3, nheads, head_dim, n_embd]
                         g = g.reshape(old_shape)
                         u = u.reshape(old_shape)
                     elif self.muon_mode == "voh_only" and is_qkv:
@@ -460,7 +468,7 @@ class Muon(torch.optim.Optimizer):
                         # We only update V part of the parameter
                         # The full gradient g is restored for momentum buffer update
                         g = state["momentum_buffer"]  # Use the full momentum buffer
-                    elif (self.muon_mode == "split_qkv" or self.split_heads) and is_wo:
+                    elif self.split_heads and is_wo:
                         # Reshape back from [nheads, n_embd, head_dim] to [n_embd, nheads*head_dim]
                         g = g.transpose(0, 1).reshape(old_shape)
                         u = u.transpose(0, 1).reshape(old_shape)
