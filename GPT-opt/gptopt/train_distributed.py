@@ -53,8 +53,13 @@ def compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd
                     svals = torch.linalg.svdvals(tensor)
                 except RuntimeError:
                     svals = torch.linalg.svdvals(tensor.cpu()).to(tensor.device)
-                key = f'svd/{category}/{layer_label}/{part}'
-                metrics[key] = wandb.Histogram(svals.detach().float().cpu().numpy())
+                # Linear-scale histogram (kept for backward compatibility)
+                key_linear = f'svd/{category}/{layer_label}/{part}'
+                metrics[key_linear] = wandb.Histogram(svals.detach().float().cpu().numpy())
+                # Log10-scale histogram for finer-grained analysis over training
+                log_svals = torch.log10(svals.clamp_min(1e-12))
+                key_log = f'svd_log/{category}/{layer_label}/{part}'
+                metrics[key_log] = wandb.Histogram(log_svals.detach().float().cpu().numpy())
             
             for target_name, layer_label in svd_targets:
                 try:
