@@ -1,0 +1,102 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "test-pe-ns"
+
+  # Dataset and model
+  training_data:
+    value: fineweb1B
+
+  gpt_model:
+    value: gpt-small
+
+  # Muon optimizer with either Newton–Schulz (Keller) or PolarExpress
+  optimizer_params.name:
+    value: muon
+
+  # Learning rates to compare
+  optimizer_params.args.lr:
+    values: [0.01, 0.02]
+
+  optimizer_params.args.weight_decay:
+    value: 0.01
+
+  # AdamW betas for backup optimizer (embeddings, 1D params)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+
+  # Polar factorization method:
+  #   - Keller       → Muon + NS (5 iterations)
+  #   - polarexpress → Muon + PolarExpress (5 iterations, safety 1.01, cushion 0.024)
+  optimizer_params.args.polar_method:
+    values: [Keller, polarexpress]
+
+  # Newton–Schulz steps (used when polar_method = Keller)
+  optimizer_params.args.ns_steps:
+    value: 5
+
+  # PolarExpress hyperparameters (used when polar_method = polarexpress)
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+
+  optimizer_params.args.polar_safety:
+    value: 1.01
+
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+
+  # Single seed for this focused comparison
+  seed:
+    value: 42
+
+  # Training parameters (1 full epoch)
+  training_data.training_params.num_epochs:
+    value: 1
+
+  training_data.training_params.batch_size:
+    value: 8
+
+  training_data.training_params.tokens_processed:
+    value: 131072
+
+  # Logging (same cadence as other 1-epoch Muon tests)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+
+  logging_params.diag_log_step:
+    value: 800
+
+  logging_params.val_step:
+    value: 3200
+
+  logging_params.svd_log_step:
+    value: 800
+
+  logging_params.save_ckpt_step:
+    value: 3200
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["test", "muon", "ns-vs-pe"]
+
+# Test PE vs NS sweep:
+#   lr ∈ {0.01, 0.02}
+#   polar_method ∈ {Keller, polarexpress}
+#   seed = 42
+# → 4 runs comparing Muon+NS vs Muon+PE at two learning rates for 1 full epoch.
