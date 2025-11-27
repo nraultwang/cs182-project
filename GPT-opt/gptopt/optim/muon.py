@@ -341,13 +341,6 @@ class Muon(torch.optim.Optimizer):
                     # Original split_heads mode
                     old_shape = g.shape
                     g = g.reshape(3 * self.nheads, g.shape[0] // (3 * self.nheads), g.shape[1])
-                    
-                elif self.split_heads and is_wo:
-                    # Split W_O by heads (independent of muon_mode)
-                    old_shape = g.shape
-                    n_embd = g.shape[0]
-                    head_dim = g.shape[1] // self.nheads
-                    g = g.reshape(n_embd, self.nheads, head_dim).transpose(0, 1)
 
                 # Use the selected polar factorization method
                 import time as time_module
@@ -468,10 +461,6 @@ class Muon(torch.optim.Optimizer):
                         # We only update V part of the parameter
                         # The full gradient g is restored for momentum buffer update
                         g = state["momentum_buffer"]  # Use the full momentum buffer
-                    elif self.split_heads and is_wo:
-                        # Reshape back from [nheads, n_embd, head_dim] to [n_embd, nheads*head_dim]
-                        g = g.transpose(0, 1).reshape(old_shape)
-                        u = u.transpose(0, 1).reshape(old_shape)
                     elif self.split_heads and is_qkv:
                         # Original split_heads mode
                         g = g.reshape(old_shape)
