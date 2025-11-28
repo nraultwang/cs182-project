@@ -64,7 +64,7 @@ parameters:
   seed:
     values: [42, 123, 456]
   
-  # Training parameters (0.3 epochs for faster GeForce runs)
+  # Training parameters (0.3 epochs)
   training_data.training_params.num_epochs:
     value: 0.3
   
@@ -72,7 +72,7 @@ parameters:
     value: 32
 
   training_data.training_params.tokens_processed:
-    value: 131072
+    value: 524288
   
   # Logging (same cadence as Phase 1 stage 2)
   # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
