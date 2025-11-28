@@ -67,7 +67,7 @@ parameters:
     value: 1
 
   training_data.training_params.batch_size:
-    value: 32
+    values: [16, 32]
 
   training_data.training_params.tokens_processed:
     value: 524288
