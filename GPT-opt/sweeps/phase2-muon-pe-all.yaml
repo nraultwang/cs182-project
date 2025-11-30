@@ -1,0 +1,97 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase2-muon-pe-all"
+
+  # Dataset and model (same as Phase 2 runs)
+  training_data:
+    value: fineweb1B
+
+  gpt_model:
+    value: gpt-small
+
+  # Muon optimizer (PolarExpress on all layers, extended LR grid)
+  optimizer_params.name:
+    value: muon
+
+  optimizer_params.args.lr:
+    values: [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12]
+
+  optimizer_params.args.weight_decay:
+    value: 0.01
+
+  # AdamW betas for backup optimizer (embeddings, 1D params)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+
+  # PolarExpress method (Phase 1 best hyperparams)
+  optimizer_params.args.polar_method:
+    value: polarexpress
+
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+
+  optimizer_params.args.polar_safety:
+    value: 1.01
+
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+
+  # Newton–Schulz steps (Muon parameter, still used in PE impl)
+  optimizer_params.args.ns_steps:
+    value: 5
+
+  # Seeds for Phase 2 (match AdamW Phase 2 runs)
+  seed:
+    values: [42, 123, 456]
+
+  # Training parameters (0.3 epochs, consistent with MSLR search)
+  training_data.training_params.num_epochs:
+    value: 0.3
+
+  training_data.training_params.batch_size:
+    value: 32
+
+  training_data.training_params.tokens_processed:
+    value: 524288
+
+  # Logging (same cadence as Phase 2 AdamW/Muon stage)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+
+  logging_params.diag_log_step:
+    value: 800
+
+  logging_params.val_step:
+    value: 3200
+
+  logging_params.svd_log_step:
+    value: 800
+
+  logging_params.save_ckpt_step:
+    value: 3200
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["phase2", "muon", "muonall-mslr-search", "polarexpress"]
+
+# Phase 2 Muon (all layers, PolarExpress) extended LR sweep:
+#   lr ∈ {0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10, 0.11, 0.12}
+#   seed ∈ {42, 123, 456}
+# → 36 Muon+PE runs exploring extended high-LR stability vs. AdamW and Muon+NS baselines.
