@@ -68,7 +68,7 @@ parameters:
 
   # Training parameters (1 full epoch)
   training_data.training_params.num_epochs:
-    value: 1
+    value: 0.5
 
   training_data.training_params.batch_size:
     value: 8
