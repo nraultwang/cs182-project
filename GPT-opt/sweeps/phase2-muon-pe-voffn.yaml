@@ -14,7 +14,7 @@ command:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "phase2-muon-ns-voffn"
+    value: "phase2-muon-pe-voffn"
 
   # Dataset and model (same as Phase 2 runs)
   training_data:
@@ -23,7 +23,7 @@ parameters:
   gpt_model:
     value: gpt-small
 
-  # Muon optimizer (Newton–Schulz on all layers, extended LR grid)
+  # Muon optimizer (PolarExpress, VOH-only mode, LR sweep)
   optimizer_params.name:
     value: muon
 
@@ -37,13 +37,24 @@ parameters:
   optimizer_params.args.adamw_betas:
     value: [0.9, 0.999]
 
+  # Apply Muon only to V, W_O, FFN
   optimizer_params.args.muon_mode:
     value: voh_only
 
-  # Newton–Schulz (Keller) on all Muon layers, 5 iterations
+  # PolarExpress method (Phase 1 best hyperparams)
   optimizer_params.args.polar_method:
-    value: Keller
+    value: polarexpress
 
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+
+  optimizer_params.args.polar_safety:
+    value: 1.01
+
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+
+  # Newton–Schulz steps (Muon parameter, still used internally)
   optimizer_params.args.ns_steps:
     value: 5
 
@@ -82,9 +93,9 @@ parameters:
     value: "cs182-project-GPT-opt"
 
   logging_params.wandb.tags:
-    value: ["phase2", "muon", "muonall-mslr-search", "voffn"]
+    value: ["phase2", "muon", "voffn", "polarexpress"]
 
-# Phase 2 Muon (VOH-only, Newton–Schulz) LR sweep (voffn variant):
+# Phase 2 Muon (VOH-only, PolarExpress) LR sweep (voffn variant):
 #   lr ∈ {0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.01}
 #   seed ∈ {42, 123, 456}
-# → 30 Muon runs exploring VOH-only NS stability vs. AdamW baseline.
+# → 30 Muon+PE runs exploring VOH-only PE stability vs. AdamW and Muon+NS baselines.
