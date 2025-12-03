@@ -25,6 +25,7 @@ optimizer_params:
     adamw_betas: null
     muon_mode: null
     split_heads: null
+    muon_variant: null
 
 # Learning rate schedule
 lr_schedule:

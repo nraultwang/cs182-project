@@ -30,11 +30,12 @@ parameters:
   #   - pe_mod_all  : Muon + PolarExpress, stacked_qkv, num_iters=3, cushion=0.04
   #   - pe_voffn    : Muon + PolarExpress, voh_only
   #   - ns_voffn    : Muon + Keller (NS), voh_only
+  #   - adamw_repro : AdamW baseline (lr=0.0003, weight_decay=0.0, betas=(0.9, 0.999))
   optimizer_params.name:
     value: muon
 
   optimizer_params.args.muon_variant:
-    values: [pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn]
+    values: [pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn, adamw_repro]
 
   # Learning rate used for paper reproduction (set to your chosen best Muon LR)
   optimizer_params.args.lr:
