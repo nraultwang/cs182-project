@@ -652,6 +652,30 @@ class Muon(torch.optim.Optimizer):
                 
                 # Compute AdamW update
                 g_qk_update = buf1 / (eps + buf2.sqrt())
+
+                # Cache Q and K AdamW update matrices for SVD diagnostics in voh_only mode.
+                # This lets compute_advanced_metrics log svd/post_update/... for q and k,
+                # analogous to the PE-based post_update metrics in stacked_qkv mode.
+                param_name = state.get("param_name", "")
+                if "attn.c_attn.weight" in param_name:
+                    for target_layer in [0, 5, 11]:
+                        if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                            layer_key = f"layer{target_layer}"
+                            if not hasattr(self, "_pe_last_update_mats"):
+                                self._pe_last_update_mats = {}
+
+                            u_qk_mat = g_qk_update
+                            if u_qk_mat.ndim > 2:
+                                u_qk_mat = u_qk_mat.view(u_qk_mat.size(0), -1)
+                            u_qk_cpu = u_qk_mat.detach().to(dtype=torch.float32).cpu()
+
+                            entry = self._pe_last_update_mats.setdefault(layer_key, {})
+                            rows = n_embd
+                            q_cpu = u_qk_cpu[0:rows, :]
+                            k_cpu = u_qk_cpu[rows:2*rows, :]
+                            entry["q"] = q_cpu
+                            entry["k"] = k_cpu
+                            break
                 
                 bias_correction1 = 1 - beta1**step
                 bias_correction2 = 1 - beta2**step
