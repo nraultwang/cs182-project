@@ -106,9 +106,12 @@ def main(config : DictConfig):
             elif muon_variant == 'pe_voffn':
                 opt_config_args['polar_method'] = 'polarexpress'
                 opt_config_args['muon_mode'] = 'voh_only'
+                # Use a smaller LR for voffn variants
+                opt_config_args['lr'] = 0.003
             elif muon_variant == 'ns_voffn':
                 opt_config_args['polar_method'] = 'Keller'
                 opt_config_args['muon_mode'] = 'voh_only'
+                opt_config_args['lr'] = 0.003
             elif muon_variant == 'adamw_repro':
                 # AdamW baseline for reproduce-paper sweeps
                 opt_config['name'] = 'adamw'
