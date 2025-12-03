@@ -15,39 +15,27 @@ command:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "timing"
+    value: "timing-adamw"
 
-  # Dataset and model (match Phase 2 setup)
+  # Dataset and model (match Muon timing sweep)
   training_data:
     value: fineweb1B
 
   gpt_model:
     value: gpt-small
 
-  # Muon optimizer timing variants
-  # Implemented via helper field optimizer_params.args.muon_variant in run_hydra.py
-  #   - pe_all      : Muon + PolarExpress, stacked_qkv, num_iters=5, cushion=0.024
-  #   - ns_all      : Muon + Keller (NS), stacked_qkv
-  #   - pe_mod_all  : Muon + PolarExpress, stacked_qkv, num_iters=3, cushion=0.04
-  #   - pe_voffn    : Muon + PolarExpress, voh_only
-  #   - ns_voffn    : Muon + Keller (NS), voh_only
-  #   - adamw_timing: AdamW baseline (lr=0.0003, weight_decay=0.01, betas=(0.9, 0.999))
+  # AdamW optimizer baseline for timing experiments
   optimizer_params.name:
-    value: muon
+    value: adamw
 
-  optimizer_params.args.muon_variant:
-    values: [pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn, adamw_timing]
-
-  # Timing experiments use the standard Muon LR (adjust if needed)
+  # Standard AdamW hyperparameters for timing
   optimizer_params.args.lr:
+    value: 0.0003
+
+  optimizer_params.args.weight_decay:
     value: 0.01
 
-  # Timing sweep: normal weight decay 0.1
-  optimizer_params.args.weight_decay:
-    value: 0.1
-
-  # AdamW betas for backup optimizer (embeddings, 1D params)
-  optimizer_params.args.adamw_betas:
+  optimizer_params.args.betas:
     value: [0.9, 0.999]
 
   # Single seed for focused timing comparison
@@ -67,7 +55,6 @@ parameters:
   # Logging configured for timing-only sweeps.
   # timing_only=True ensures:
   #   - Only light end-to-end metrics are logged (train/loss, train/step_time_ms, train/step)
-  #   - PE timing is still logged (pe/time_ms) at diag_log_step
   #   - Heavy diagnostics (attention, SVD, orthogonality histograms, val metrics) are skipped.
   logging_params.log_step:
     value: 160
@@ -94,16 +81,12 @@ parameters:
     value: "cs182-project-GPT-opt"
 
   logging_params.wandb.tags:
-    value: ["timing", "muon", "pe-vs-ns", "voffn"]
+    value: ["timing", "adamw", "baseline"]
 
-# Timing sweep:
-#   muon_variant ∈ {pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn}
+# Timing AdamW baseline:
+#   optimizer = AdamW
+#   lr = 0.0003
+#   weight_decay = 0.01
+#   betas = (0.9, 0.999)
 #   seed = 42
-#   weight_decay = 0.1
-#   lr = 0.01 (standard Muon LR; adjust if desired)
-# Logs only:
-#   - train/loss
-#   - train/step_time_ms
-#   - train/total_time_seconds, train/total_time_hours (end of run)
-#   - pe/time_ms (orthogonalization time, averaged at diag_log_step)
-# Heavy diagnostics and validation metrics are disabled for cleaner timing.
+# → 1 AdamW timing run matching the Muon timing setup.
