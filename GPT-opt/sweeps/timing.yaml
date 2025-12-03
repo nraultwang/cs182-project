@@ -39,7 +39,7 @@ parameters:
 
   # Timing experiments use the standard Muon LR (adjust if needed)
   optimizer_params.args.lr:
-    value: 0.02
+    value: 0.01
 
   # Timing sweep: normal weight decay 0.1
   optimizer_params.args.weight_decay:
@@ -53,9 +53,9 @@ parameters:
   seed:
     value: 42
 
-  # Training parameters (0.3 epochs, consistent with Phase 2 sweeps)
+  # Training parameters (1 epoch timing run)
   training_data.training_params.num_epochs:
-    value: 0.3
+    value: 1
 
   training_data.training_params.batch_size:
     value: 32
@@ -99,7 +99,7 @@ parameters:
 #   muon_variant ∈ {pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn}
 #   seed = 42
 #   weight_decay = 0.1
-#   lr = 0.02 (standard Muon LR; adjust if desired)
+#   lr = 0.01 (standard Muon LR; adjust if desired)
 # Logs only:
 #   - train/loss
 #   - train/step_time_ms

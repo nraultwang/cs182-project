@@ -38,7 +38,7 @@ parameters:
 
   # Learning rate used for paper reproduction (set to your chosen best Muon LR)
   optimizer_params.args.lr:
-    value: 0.02
+    value: 0.01
 
   # Reproduction sweep: no weight decay
   optimizer_params.args.weight_decay:
@@ -54,7 +54,7 @@ parameters:
 
   # Training parameters (0.3 epochs, consistent with Phase 2 sweeps)
   training_data.training_params.num_epochs:
-    value: 0.3
+    value: 1.0
 
   training_data.training_params.batch_size:
     value: 32
