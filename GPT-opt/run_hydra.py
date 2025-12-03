@@ -84,9 +84,41 @@ def main(config : DictConfig):
     # Setup optimizer
     optimizer_obj = get_optimizer_factory(opt_config['name'])
     opt_config_args = opt_config['args']
+
+    # Optional helper: map named Muon variants to concrete settings
+    if opt_config['name'] == 'muon':
+        muon_variant = opt_config_args.get('muon_variant', None)
+        if muon_variant is not None:
+            if muon_variant == 'pe_all':
+                opt_config_args['polar_method'] = 'polarexpress'
+                opt_config_args['muon_mode'] = 'stacked_qkv'
+                if opt_config_args.get('polar_num_iters', None) is None:
+                    opt_config_args['polar_num_iters'] = 5
+                if opt_config_args.get('polar_cushion', None) is None:
+                    opt_config_args['polar_cushion'] = 0.024
+            elif muon_variant == 'ns_all':
+                opt_config_args['polar_method'] = 'Keller'
+                opt_config_args['muon_mode'] = 'stacked_qkv'
+            elif muon_variant == 'pe_mod_all':
+                opt_config_args['polar_method'] = 'polarexpress'
+                opt_config_args['muon_mode'] = 'stacked_qkv'
+                opt_config_args['polar_num_iters'] = 3
+                opt_config_args['polar_cushion'] = 0.04
+            elif muon_variant == 'pe_voffn':
+                opt_config_args['polar_method'] = 'polarexpress'
+                opt_config_args['muon_mode'] = 'voh_only'
+            elif muon_variant == 'ns_voffn':
+                opt_config_args['polar_method'] = 'Keller'
+                opt_config_args['muon_mode'] = 'voh_only'
+            else:
+                raise ValueError(f"Unknown muon_variant: {muon_variant}")
+            # Do not pass helper field into the optimizer constructor
+            opt_config_args['muon_variant'] = None
+
     # Filter out None/null values to avoid passing unused parameters to optimizer
     opt_config_args = {k: v for k, v in opt_config_args.items() if v is not None}
-    if opt_config['name'] in ['muon']: opt_config_args['nheads'] = config['gpt_model'].get('n_head', None)
+    if opt_config['name'] in ['muon']:
+        opt_config_args['nheads'] = config['gpt_model'].get('n_head', None)
     optimizer = optimizer_obj(model_copy.named_parameters(), **opt_config_args)
     scheduler = get_scheduler(config['lr_schedule'], optimizer, total_iterations=total_iterations)
 

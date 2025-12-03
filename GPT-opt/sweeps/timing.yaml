@@ -1,0 +1,108 @@
+program: run_hydra.py
+method: grid
+metric:
+  # Use total training time as the sweep metric
+  name: train/total_time_seconds
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "timing"
+
+  # Dataset and model (match Phase 2 setup)
+  training_data:
+    value: fineweb1B
+
+  gpt_model:
+    value: gpt-small
+
+  # Muon optimizer timing variants
+  # Implemented via helper field optimizer_params.args.muon_variant in run_hydra.py
+  #   - pe_all      : Muon + PolarExpress, stacked_qkv, num_iters=5, cushion=0.024
+  #   - ns_all      : Muon + Keller (NS), stacked_qkv
+  #   - pe_mod_all  : Muon + PolarExpress, stacked_qkv, num_iters=3, cushion=0.04
+  #   - pe_voffn    : Muon + PolarExpress, voh_only
+  #   - ns_voffn    : Muon + Keller (NS), voh_only
+  optimizer_params.name:
+    value: muon
+
+  optimizer_params.args.muon_variant:
+    values: [pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn]
+
+  # Timing experiments use the standard Muon LR (adjust if needed)
+  optimizer_params.args.lr:
+    value: 0.02
+
+  # Timing sweep: normal weight decay 0.1
+  optimizer_params.args.weight_decay:
+    value: 0.1
+
+  # AdamW betas for backup optimizer (embeddings, 1D params)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+
+  # Single seed for focused timing comparison
+  seed:
+    value: 42
+
+  # Training parameters (0.3 epochs, consistent with Phase 2 sweeps)
+  training_data.training_params.num_epochs:
+    value: 0.3
+
+  training_data.training_params.batch_size:
+    value: 32
+
+  training_data.training_params.tokens_processed:
+    value: 524288
+
+  # Logging configured for timing-only sweeps.
+  # timing_only=True ensures:
+  #   - Only light end-to-end metrics are logged (train/loss, train/step_time_ms, train/step)
+  #   - PE timing is still logged (pe/time_ms) at diag_log_step
+  #   - Heavy diagnostics (attention, SVD, orthogonality histograms, val metrics) are skipped.
+  logging_params.log_step:
+    value: 160
+
+  logging_params.diag_log_step:
+    value: 160
+
+  logging_params.val_step:
+    value: 3200
+
+  logging_params.svd_log_step:
+    value: 800
+
+  logging_params.save_ckpt_step:
+    value: 0
+
+  logging_params.save_checkpoint:
+    value: false
+
+  logging_params.timing_only:
+    value: true
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["timing", "muon", "pe-vs-ns", "voffn"]
+
+# Timing sweep:
+#   muon_variant ∈ {pe_all, ns_all, pe_mod_all, pe_voffn, ns_voffn}
+#   seed = 42
+#   weight_decay = 0.1
+#   lr = 0.02 (standard Muon LR; adjust if desired)
+# Logs only:
+#   - train/loss
+#   - train/step_time_ms
+#   - train/total_time_seconds, train/total_time_hours (end of run)
+#   - pe/time_ms (orthogonalization time, averaged at diag_log_step)
+# Heavy diagnostics and validation metrics are disabled for cleaner timing.

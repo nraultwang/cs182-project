@@ -381,6 +381,7 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
 
     # Track total training time for this run
     training_start_time = time.time()
+    timing_only = logging_params.get('timing_only', False)
     
     autocast_ctxt = contextlib.nullcontext()
     if training_params['autocast']:
@@ -496,33 +497,40 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                 
                 # A) End-to-end metrics (at log_step frequency)
                 if master_process and wandb_run is not None and (step % log_step == 0):
-                    wandb_log_dict = {
-                        "train/loss": loss_accum.item(), 
-                        "train/grad_norm": norm.item(),
-                        "train/step_time_ms": step_time * 1000,
-                        "train/step": step,
-                        "train/lr": optimizer.param_groups[0]['lr'],
-                        "train/tokens_per_sec": tps,
-                    }
-                    
-                    # Check for NaN/Inf (numeric stability alarms)
-                    if not torch.isfinite(loss_accum):
-                        wandb_log_dict["train/naninf_flag"] = 1.0
+                    if timing_only:
+                        wandb_log_dict = {
+                            "train/loss": loss_accum.item(),
+                            "train/step_time_ms": step_time * 1000,
+                            "train/step": step,
+                        }
                     else:
-                        wandb_log_dict["train/naninf_flag"] = 0.0
-                    
-                    # Amplitude check (at log_step frequency or if NaN detected for immediate alarm)
-                    if step % log_step == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
-                        grad_list = [p.grad.abs().max().item() for p in model.parameters() if p.grad is not None]
-                        if grad_list:  # Only compute if gradients exist
-                            max_grad = max(grad_list)
-                            wandb_log_dict["train/amp_scaler"] = max_grad
-                            wandb_log_dict["train/amp_overflows"] = 1.0 if max_grad > 1e4 else 0.0
-                    
-                    if hasattr(optimizer, 'step_size_list'):
-                        wandb_log_dict["train/step_size_list"] = optimizer.step_size_list
-                    for param_group_ix, param_group in enumerate(optimizer.param_groups):
-                        wandb_log_dict[f"train/lr_{param_group_ix}"] = param_group['lr']
+                        wandb_log_dict = {
+                            "train/loss": loss_accum.item(), 
+                            "train/grad_norm": norm.item(),
+                            "train/step_time_ms": step_time * 1000,
+                            "train/step": step,
+                            "train/lr": optimizer.param_groups[0]['lr'],
+                            "train/tokens_per_sec": tps,
+                        }
+                        
+                        # Check for NaN/Inf (numeric stability alarms)
+                        if not torch.isfinite(loss_accum):
+                            wandb_log_dict["train/naninf_flag"] = 1.0
+                        else:
+                            wandb_log_dict["train/naninf_flag"] = 0.0
+                        
+                        # Amplitude check (at log_step frequency or if NaN detected for immediate alarm)
+                        if step % log_step == 0 or wandb_log_dict["train/naninf_flag"] == 1.0:
+                            grad_list = [p.grad.abs().max().item() for p in model.parameters() if p.grad is not None]
+                            if grad_list:  # Only compute if gradients exist
+                                max_grad = max(grad_list)
+                                wandb_log_dict["train/amp_scaler"] = max_grad
+                                wandb_log_dict["train/amp_overflows"] = 1.0 if max_grad > 1e4 else 0.0
+                        
+                        if hasattr(optimizer, 'step_size_list'):
+                            wandb_log_dict["train/step_size_list"] = optimizer.step_size_list
+                        for param_group_ix, param_group in enumerate(optimizer.param_groups):
+                            wandb_log_dict[f"train/lr_{param_group_ix}"] = param_group['lr']
                     
                     wandb_run.log(wandb_log_dict)
                 
@@ -531,31 +539,33 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     wandb_diag_dict = {}
                     
                     # PE metrics
-                    if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
-                        wandb_diag_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])
-                    if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
-                        wandb_diag_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])
                     if hasattr(optimizer, '_pe_times') and len(optimizer._pe_times) > 0:
                         # pe/time_ms reflects the average PE iteration time over the most recent window
                         wandb_diag_dict["pe/time_ms"] = np.mean(optimizer._pe_times[-10:])
-                    
-                    # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
-                    if hasattr(optimizer, '_pe_ortho_errs_before_per_layer'):
-                        for layer_key, errs in optimizer._pe_ortho_errs_before_per_layer.items():
-                            if len(errs) > 0:
-                                wandb_diag_dict[f"ortho_err_before/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
-                    if hasattr(optimizer, '_pe_ortho_errs_after_per_layer'):
-                        for layer_key, errs in optimizer._pe_ortho_errs_after_per_layer.items():
-                            if len(errs) > 0:
-                                wandb_diag_dict[f"ortho_err_after/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
 
-                    # Per-layer post-PE SVD metrics (condition number, sigma_max/min, effective_rank, spectral_gap)
-                    # Attention health and weight scales (compute_svd=False to skip expensive SVD)
-                    try:
-                        advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=False)
-                        wandb_diag_dict.update(advanced_metrics)
-                    except Exception as e:
-                        print(f"Warning: Could not compute diagnostic metrics at step {step}: {e}")
+                    if not timing_only:
+                        if hasattr(optimizer, '_pe_ortho_errs_before') and len(optimizer._pe_ortho_errs_before) > 0:
+                            wandb_diag_dict["pe/ortho_err_before"] = np.mean(optimizer._pe_ortho_errs_before[-10:])
+                        if hasattr(optimizer, '_pe_ortho_errs_after') and len(optimizer._pe_ortho_errs_after) > 0:
+                            wandb_diag_dict["pe/ortho_err_after"] = np.mean(optimizer._pe_ortho_errs_after[-10:])
+                        
+                        # Per-layer ortho errors for sentinel layers (0, 5, 11) in stacked mode
+                        if hasattr(optimizer, '_pe_ortho_errs_before_per_layer'):
+                            for layer_key, errs in optimizer._pe_ortho_errs_before_per_layer.items():
+                                if len(errs) > 0:
+                                    wandb_diag_dict[f"ortho_err_before/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
+                        if hasattr(optimizer, '_pe_ortho_errs_after_per_layer'):
+                            for layer_key, errs in optimizer._pe_ortho_errs_after_per_layer.items():
+                                if len(errs) > 0:
+                                    wandb_diag_dict[f"ortho_err_after/{layer_key}_stacked_qkv"] = np.mean(errs[-10:])
+
+                        # Per-layer post-PE SVD metrics (condition number, sigma_max/min, effective_rank, spectral_gap)
+                        # Attention health and weight scales (compute_svd=False to skip expensive SVD)
+                        try:
+                            advanced_metrics = compute_advanced_metrics(model, optimizer, batch, autocast_ctxt, compute_svd=False)
+                            wandb_diag_dict.update(advanced_metrics)
+                        except Exception as e:
+                            print(f"Warning: Could not compute diagnostic metrics at step {step}: {e}")
                     
                     if wandb_diag_dict:
                         wandb_run.log(wandb_diag_dict)
@@ -563,7 +573,7 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                 # E) SVD-based metrics (at svd_log_step frequency - expensive, keep at 50 steps)
                 # NOTE: We explicitly ignore any PE timings that may occur inside SVD diagnostics,
                 # so that pe/time_ms only reflects the cost of the PE call during the main optimizer step.
-                if master_process and wandb_run is not None and (step % svd_log_step == 0):
+                if master_process and wandb_run is not None and (step % svd_log_step == 0) and (not timing_only):
                     # Cache current length of PE timing list (if present)
                     pe_times_len_before = None
                     if hasattr(optimizer, "_pe_times") and optimizer._pe_times is not None:
@@ -591,7 +601,7 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     print(f"Step {step} of {total_iterations*grad_accum_steps}.")
                     print(f"Time taken : {step_time*1000:0.1f}ms | Tokens/s : {tps/1000:0.1f}k | Loss : {loss_accum.item():0.3f}")
                     
-                if (step % logging_params['val_step'] == 0):
+                if (step % logging_params['val_step'] == 0) and (not timing_only):
                     val_loss = eval_validation_loss(model, val_dataloader, val_accum_steps, autocast_ctxt)
                     val_ppl = torch.exp(val_loss).item()
                     if master_process and wandb_run is not None:
@@ -639,6 +649,11 @@ def train(train_dataloader, val_dataloader, model, optimizer, training_params, l
                     json.dump(logger.__dict__, file)
         if master_process and wandb_run is not None:
             wandb_run.log({"val/loss": val_loss.item(), "val/step": step, "train/loss": logger.losses[-1], "train/step": step})
+
+    # Final total training time metric
+    total_training_time = time.time() - training_start_time
+    if master_process and wandb_run is not None:
+        wandb_run.log({"train/total_time_s": total_training_time})
 
     if hasattr(optimizer, 'step_size_list'):      # Check if optimizer has a step_size_list attribute
         logger.step_size_list = optimizer.step_size_list  
