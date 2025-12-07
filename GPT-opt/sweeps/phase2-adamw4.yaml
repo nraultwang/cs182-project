@@ -28,7 +28,7 @@ parameters:
     value: adamw
 
   optimizer_params.args.lr:
-    value: 0.021
+    value: 0.0021
 
   optimizer_params.args.weight_decay:
     value: 0.01
