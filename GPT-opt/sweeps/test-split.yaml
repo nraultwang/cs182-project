@@ -76,7 +76,7 @@ parameters:
     value: 32
 
   training_data.training_params.tokens_processed:
-    value: 131072
+    value: 524288
   
   # Logging (same cadence as other 1-epoch tests)
   # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
