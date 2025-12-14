@@ -51,8 +51,8 @@ The Figure below depicts a successful initiation of a run:
 # Reproducing Plots
 
 ## Download data [if you want to use your own sweep data]
-Download your wanb sweep data to your local computer
-`download-data.ipynb`
+Download your custom wanb sweep data to a local computer using the notebook
+`plotting/download-data.ipynb`
 
 ## Generate plots [use our included data]
 If you are using your own data, within the notebook, there are code cells explaining how to establish sweep name mappings to the wandb unique `sweep_id`.
@@ -60,6 +60,6 @@ If you are using your own data, within the notebook, there are code cells explai
 The data we got from our sweeps is provided to you in the `plotting/data` folder.
 
 To create the plots, run this notebook:
-`analyze-data.ipynb`
+`plotting/analyze-data.ipynb`
 
 The notebook is set up for the cells to be run in order using our data.
