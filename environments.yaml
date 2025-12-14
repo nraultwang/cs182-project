@@ -12,6 +12,8 @@ dependencies:
   - jupyterlab    # Use jupyterlab for the modern notebook environment
   - matplotlib    # Core plotting library
   - seaborn       # Statistical visualization built on Matplotlib
+  - hydra-core # Install the configuration manager via Conda
+  - omegaconf  # Hydra's main dependency, best installed via Conda too
   
   # Pip manages the Deep Learning stack, ensuring the exact CUDA version is pulled
   - pip:
@@ -26,4 +28,3 @@ dependencies:
     - wandb
     - transformers
     - muon-optimizer
-    - hydra
