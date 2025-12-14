@@ -51,8 +51,11 @@ Download your wanb sweep data to your local computer
 `download-data.ipynb`
 
 ## Generate plots [use our included data]
-Within the notebook, there are code cells explaining how to establish sweep name mappings to the wandb unique `sweep_id`.
+If you are using your own data, within the notebook, there are code cells explaining how to establish sweep name mappings to the wandb unique `sweep_id`.
+
+The data we got from our sweeps is provided to you in the `plotting/data` folder.
 
 To create the plots, run this notebook:
 `analyze-data.ipynb`
 
+The notebook is set up for the cells to be run in order using our data.
