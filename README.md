@@ -7,7 +7,7 @@ Install [miniconda](https://www.anaconda.com/docs/getting-started/miniconda/inst
 ```bash
 # 1. Create a conda environment
 conda env create -f environments.yaml
-conda activate cs182-py312
+conda activate cs182-rep
 
 ```
-3. [optional] Add the following to the end of your .bashrc file to enter this environment automatically upon shell creation: `conda activate cs182-py312`
+3. [optional] Add the following to the end of your .bashrc file to enter this environment automatically upon shell creation: `conda activate cs182-rep`
