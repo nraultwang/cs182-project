@@ -38,6 +38,7 @@ logging_params:
   log_step: 50
   val_step: 50
   save_ckpt_step: 500
+  ckpt_schedule: []  # optional fractional checkpoints (e.g., [0.0, 0.5, 1.0])
   load_ckpt_step: 0
   keep_last: 2
   save_checkpoint: true  # Enable by default for long runs
