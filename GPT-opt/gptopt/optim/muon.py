@@ -222,6 +222,7 @@ class Muon(torch.optim.Optimizer):
         self.polar_safety = polar_safety
         self.polar_cushion = polar_cushion
         self.iter_counter = 0
+        self.polar_method = polar_method
         
         # Instantiate the polar factorization method
         self.polar_factorizer = self._initialize_polar_factorizer(polar_method)
@@ -308,13 +309,17 @@ class Muon(torch.optim.Optimizer):
                 
                 # Mode-specific gradient preprocessing
                 if self.muon_mode == "split_qkv" and is_qkv:
-                    # Mode 2: Split QKV into Q, K, V and apply Muon to each separately
+                    # Mode 2: Split QKV into Q, K, V. Per-head splitting is controlled by split_heads.
                     old_shape = g.shape
-                    # Split into Q, K, V (each is [n_embd, n_embd])
+                    # Original stacked shape is [3 * n_embd, n_embd]
                     n_embd = g.shape[1]
-                    head_dim = n_embd // self.nheads
-                    # Reshape to [3, nheads, head_dim, n_embd]
-                    g = g.reshape(3, self.nheads, head_dim, n_embd)
+                    if self.split_heads:
+                        # Per-head: reshape to [3, nheads, head_dim, n_embd]
+                        head_dim = n_embd // self.nheads
+                        g = g.reshape(3, self.nheads, head_dim, n_embd)
+                    else:
+                        # No head splitting: reshape to [3, n_embd, n_embd]
+                        g = g.reshape(3, n_embd, n_embd)
                     qkv_split_indices = (0, 1, 2)  # Process Q, K, V separately
                     
                 elif self.muon_mode == "voh_only" and is_qkv:
@@ -322,24 +327,21 @@ class Muon(torch.optim.Optimizer):
                     # Extract only V from the gradient (last third)
                     old_shape = g.shape
                     n_embd = g.shape[1]
-                    head_dim = n_embd // self.nheads
                     # Get only V part: g[2*n_embd:, :]
                     g_v = g[2*n_embd:, :]
+                    head_dim = n_embd // self.nheads
                     # Reshape V to [nheads, head_dim, n_embd] for per-head Muon
-                    g = g_v.reshape(self.nheads, head_dim, n_embd)
+                    if self.split_heads:
+                        g = g_v.reshape(self.nheads, head_dim, n_embd)
+                    else:
+                        # No head splitting: treat V as a single [n_embd, n_embd] matrix
+                        g = g_v
                     qkv_split_indices = (2,)  # Only V
                     
                 elif self.split_heads and is_qkv:
                     # Original split_heads mode
                     old_shape = g.shape
                     g = g.reshape(3 * self.nheads, g.shape[0] // (3 * self.nheads), g.shape[1])
-                    
-                elif (self.muon_mode == "split_qkv" or self.split_heads) and is_wo:
-                    # Split W_O by heads
-                    old_shape = g.shape
-                    n_embd = g.shape[0]
-                    head_dim = g.shape[1] // self.nheads
-                    g = g.reshape(n_embd, self.nheads, head_dim).transpose(0, 1)
 
                 # Use the selected polar factorization method
                 import time as time_module
@@ -356,6 +358,7 @@ class Muon(torch.optim.Optimizer):
                 # Check if using PolarExpress by seeing if it's a partial of PolarExpress
                 use_polarexpress = (hasattr(current_factorizer, 'func') and 
                                    current_factorizer.func.__name__ == 'PolarExpress')
+                use_keller = (getattr(self, 'polar_method', None) == 'Keller')
                 
                 # Start timing just before the actual PE call
                 pe_start = time_module.time()
@@ -436,6 +439,69 @@ class Muon(torch.optim.Optimizer):
                         # Fallback if return_ortho_info not supported
                         u = current_factorizer(g, group["ns_steps"])
                         pe_time = (time_module.time() - pe_start) * 1000  # ms
+                elif compute_ortho and use_keller:
+                    try:
+                        with torch.no_grad():
+                            g_sample = g if g.ndim == 2 else g[0]
+                            if g_sample.size(0) > g_sample.size(1):
+                                XTX_before_sample = g_sample.T @ g_sample
+                            else:
+                                XTX_before_sample = g_sample @ g_sample.T
+                        u = current_factorizer(g, group["ns_steps"])
+                        pe_time = (time_module.time() - pe_start) * 1000  # ms
+                        with torch.no_grad():
+                            u_sample = u if u.ndim == 2 else u[0]
+                            if u_sample.size(0) > u_sample.size(1):
+                                XTX_after_sample = u_sample.T @ u_sample
+                            else:
+                                XTX_after_sample = u_sample @ u_sample.T
+                            I = torch.eye(XTX_after_sample.size(0), device=XTX_after_sample.device, dtype=XTX_after_sample.dtype)
+                            ortho_err_before = torch.norm(XTX_before_sample - I, p='fro').item()
+                            ortho_err_after = torch.norm(XTX_after_sample - I, p='fro').item()
+                            if not hasattr(self, '_pe_ortho_errs_before'):
+                                self._pe_ortho_errs_before = []
+                                self._pe_ortho_errs_after = []
+                                self._pe_times = []
+                                self._pe_ortho_errs_before_per_layer = {}
+                                self._pe_ortho_errs_after_per_layer = {}
+                                self._pe_svd_after_svals = {}
+                            self._pe_ortho_errs_before.append(ortho_err_before)
+                            self._pe_ortho_errs_after.append(ortho_err_after)
+                            param_name = state.get("param_name", "")
+                            if self.muon_mode == "stacked_qkv" and "attn.c_attn.weight" in param_name:
+                                for target_layer in [0, 5, 11]:
+                                    if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                                        layer_key = f"layer{target_layer}"
+                                        if layer_key not in self._pe_ortho_errs_before_per_layer:
+                                            self._pe_ortho_errs_before_per_layer[layer_key] = []
+                                            self._pe_ortho_errs_after_per_layer[layer_key] = []
+                                        self._pe_ortho_errs_before_per_layer[layer_key].append(ortho_err_before)
+                                        self._pe_ortho_errs_after_per_layer[layer_key].append(ortho_err_after)
+                                        if not hasattr(self, '_pe_svd_after_svals'):
+                                            self._pe_svd_after_svals = {}
+                                        def compute_svals(matrix: torch.Tensor) -> torch.Tensor:
+                                            mat = matrix.to(dtype=torch.float32)
+                                            try:
+                                                return torch.linalg.svdvals(mat).detach().cpu()
+                                            except RuntimeError:
+                                                return torch.linalg.svdvals(mat.cpu()).detach()
+                                        u_matrix = u if u.ndim == 2 else u.reshape(state["momentum_buffer"].shape)
+                                        if u_matrix.ndim > 2:
+                                            u_matrix = u_matrix.view(u_matrix.size(0), -1)
+                                        svals_entry = self._pe_svd_after_svals.setdefault(layer_key, {})
+                                        svals_entry['stacked'] = compute_svals(u_matrix)
+                                        if u_matrix.size(0) % 3 == 0:
+                                            rows = u_matrix.size(0) // 3
+                                            Q_u = u_matrix[0:rows, :]
+                                            K_u = u_matrix[rows:2*rows, :]
+                                            V_u = u_matrix[2*rows:3*rows, :]
+                                            svals_entry['q'] = compute_svals(Q_u)
+                                            svals_entry['k'] = compute_svals(K_u)
+                                            svals_entry['v'] = compute_svals(V_u)
+                                        break
+                    except Exception as e:
+                        u = current_factorizer(g, group["ns_steps"])
+                        pe_time = (time_module.time() - pe_start) * 1000  # ms
                 else:
                     u = current_factorizer(g, group["ns_steps"])
                     pe_time = (time_module.time() - pe_start) * 1000  # ms
@@ -450,7 +516,7 @@ class Muon(torch.optim.Optimizer):
                 # Reshape back to original shape after polar factorization
                 if old_shape is not None:
                     if self.muon_mode == "split_qkv" and is_qkv:
-                        # Reshape back from [3, nheads, head_dim, n_embd] to [3*n_embd, n_embd]
+                        # Reshape back from either [3, n_embd, n_embd] or [3, nheads, head_dim, n_embd]
                         g = g.reshape(old_shape)
                         u = u.reshape(old_shape)
                     elif self.muon_mode == "voh_only" and is_qkv:
@@ -460,10 +526,6 @@ class Muon(torch.optim.Optimizer):
                         # We only update V part of the parameter
                         # The full gradient g is restored for momentum buffer update
                         g = state["momentum_buffer"]  # Use the full momentum buffer
-                    elif (self.muon_mode == "split_qkv" or self.split_heads) and is_wo:
-                        # Reshape back from [nheads, n_embd, head_dim] to [n_embd, nheads*head_dim]
-                        g = g.transpose(0, 1).reshape(old_shape)
-                        u = u.transpose(0, 1).reshape(old_shape)
                     elif self.split_heads and is_qkv:
                         # Original split_heads mode
                         g = g.reshape(old_shape)
@@ -472,7 +534,7 @@ class Muon(torch.optim.Optimizer):
                 # Cache latest post-PE update matrices for sentinel stacked QKV layers
                 # so that SVD diagnostics can log svd/post_update/... at every SVD step.
                 param_name = state.get("param_name", "")
-                if self.muon_mode == "stacked_qkv" and state.get("is_W_QKV", False) and "attn.c_attn.weight" in param_name:
+                if self.muon_mode in ["stacked_qkv", "voh_only"] and state.get("is_W_QKV", False) and "attn.c_attn.weight" in param_name:
                     for target_layer in [0, 5, 11]:
                         if f"h.{target_layer}.attn.c_attn.weight" in param_name:
                             layer_key = f"layer{target_layer}"
@@ -485,13 +547,18 @@ class Muon(torch.optim.Optimizer):
                             u_mat_cpu = u_mat.detach().to(dtype=torch.float32).cpu()
 
                             entry = self._pe_last_update_mats.setdefault(layer_key, {})
-                            entry["stacked"] = u_mat_cpu
 
-                            if u_mat_cpu.size(0) % 3 == 0:
-                                rows = u_mat_cpu.size(0) // 3
-                                entry["q"] = u_mat_cpu[0:rows, :]
-                                entry["k"] = u_mat_cpu[rows:2*rows, :]
-                                entry["v"] = u_mat_cpu[2*rows:3*rows, :]
+                            if self.muon_mode == "stacked_qkv":
+                                entry["stacked"] = u_mat_cpu
+
+                                if u_mat_cpu.size(0) % 3 == 0:
+                                    rows = u_mat_cpu.size(0) // 3
+                                    entry["q"] = u_mat_cpu[0:rows, :]
+                                    entry["k"] = u_mat_cpu[rows:2*rows, :]
+                                    entry["v"] = u_mat_cpu[2*rows:3*rows, :]
+                            elif self.muon_mode == "voh_only":
+                                # In voh_only mode, u_mat represents only the V block update.
+                                entry["v"] = u_mat_cpu
                             break
 
                 # scale update
@@ -585,6 +652,30 @@ class Muon(torch.optim.Optimizer):
                 
                 # Compute AdamW update
                 g_qk_update = buf1 / (eps + buf2.sqrt())
+
+                # Cache Q and K AdamW update matrices for SVD diagnostics in voh_only mode.
+                # This lets compute_advanced_metrics log svd/post_update/... for q and k,
+                # analogous to the PE-based post_update metrics in stacked_qkv mode.
+                param_name = state.get("param_name", "")
+                if "attn.c_attn.weight" in param_name:
+                    for target_layer in [0, 5, 11]:
+                        if f"h.{target_layer}.attn.c_attn.weight" in param_name:
+                            layer_key = f"layer{target_layer}"
+                            if not hasattr(self, "_pe_last_update_mats"):
+                                self._pe_last_update_mats = {}
+
+                            u_qk_mat = g_qk_update
+                            if u_qk_mat.ndim > 2:
+                                u_qk_mat = u_qk_mat.view(u_qk_mat.size(0), -1)
+                            u_qk_cpu = u_qk_mat.detach().to(dtype=torch.float32).cpu()
+
+                            entry = self._pe_last_update_mats.setdefault(layer_key, {})
+                            rows = n_embd
+                            q_cpu = u_qk_cpu[0:rows, :]
+                            k_cpu = u_qk_cpu[rows:2*rows, :]
+                            entry["q"] = q_cpu
+                            entry["k"] = k_cpu
+                            break
                 
                 bias_correction1 = 1 - beta1**step
                 bias_correction2 = 1 - beta2**step

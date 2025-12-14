@@ -1,0 +1,115 @@
+program: run_hydra.py
+method: grid
+metric:
+  name: val/loss
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "phase2-optimizer-grid"
+
+  # Dataset and model (same as Phase 1)
+  training_data:
+    value: fineweb1B
+
+  gpt_model:
+    value: gpt-small
+
+  # Optimizer: Muon with either Newton–Schulz (Keller) or PolarExpress
+  # AdamW baseline is provided separately via phase0-adamw.yaml
+  optimizer_params.name:
+    value: muon
+
+  # Learning rates for Phase 2 comparison (Muon typically uses higher LR than AdamW)
+  optimizer_params.args.lr:
+    values: [0.01, 0.02]
+
+  optimizer_params.args.weight_decay:
+    value: 0.01
+
+  # AdamW betas for backup optimizer (embeddings, 1D params)
+  optimizer_params.args.adamw_betas:
+    value: [0.9, 0.999]
+
+  # Muon application mode:
+  #   - stacked_qkv: Muon on all layers (stacked QKV)
+  #   - voh_only: Muon on V / W_O / FFN only
+  optimizer_params.args.muon_mode:
+    values: [stacked_qkv, voh_only]
+
+  # All Phase 2 runs use stacked heads (no per-head Muon);
+  # split_heads=True is reserved for separate ablations.
+  optimizer_params.args.split_heads:
+    value: False
+
+  # Polar factorization method:
+  #   - Keller      → Muon + NS (all layers or VO/FFN-only)
+  #   - polarexpress → Muon + PolarExpress (all layers or VO/FFN-only)
+  optimizer_params.args.polar_method:
+    values: [Keller, polarexpress]
+
+  # PolarExpress hyperparameters (used only when polar_method=polarexpress).
+  # These should be set to the Phase 1 "best" configuration.
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+
+  optimizer_params.args.polar_safety:
+    value: 1.01
+
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+
+  # Newton–Schulz steps (used when polar_method=Keller)
+  optimizer_params.args.ns_steps:
+    value: 5
+
+  # Seeds for Phase 2 (statistical robustness)
+  seed:
+    values: [42, 123, 456]
+
+  # Training parameters (1 epoch final evaluation, as in Phase 1 stage 2)
+  training_data.training_params.num_epochs:
+    value: 1
+
+  training_data.training_params.tokens_processed:
+    value: 524288
+
+  # Logging (same cadence as Phase 1 stage 2)
+  # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
+  logging_params.log_step:
+    value: 160
+
+  logging_params.diag_log_step:
+    value: 800
+
+  logging_params.val_step:
+    value: 3200
+
+  logging_params.svd_log_step:
+    value: 800
+
+  logging_params.save_ckpt_step:
+    value: 3200
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["phase2", "optimizer-grid", "muon", "voh_only", "polarexpress", "keller"]
+
+# Phase 2 Optimizer Grid (Muon-only YAML):
+#   muon_mode ∈ {stacked_qkv, voh_only}
+#   polar_method ∈ {Keller, polarexpress}
+#   lr ∈ {0.01, 0.02}
+#   seed ∈ {42, 123, 456}
+# → 2 × 2 × 2 × 3 = 24 Muon runs.
+# Combine these with the Phase 0 AdamW baseline sweep (phase0-adamw.yaml)
+# to realize the 5-optimizer grid described in the paper.

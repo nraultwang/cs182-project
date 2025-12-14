@@ -14,90 +14,89 @@ command:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "phase1-cushion-sweep"
-  
-  # Dataset and model (same as Phase 1)
+    value: "test-pe-ns"
+
+  # Dataset and model
   training_data:
     value: fineweb1B
-  
+
   gpt_model:
     value: gpt-small
-  
-  # Optimizer: Muon + PolarExpress (Phase 1 defaults)
+
+  # Muon optimizer with either Newton–Schulz (Keller) or PolarExpress
   optimizer_params.name:
     value: muon
-  
-  # Learning rate (Phase 1 default)
+
+  # Learning rates to compare
   optimizer_params.args.lr:
-    value: 0.01
-  
+    values: [0.01, 0.02]
+
   optimizer_params.args.weight_decay:
     value: 0.01
-  
-  # AdamW betas for backup optimizer (same as Phase 1)
+
+  # AdamW betas for backup optimizer (embeddings, 1D params)
   optimizer_params.args.adamw_betas:
     value: [0.9, 0.999]
-  
-  # PolarExpress method
+
+  # Polar factorization method:
+  #   - Keller       → Muon + NS (5 iterations)
+  #   - polarexpress → Muon + PolarExpress (5 iterations, safety 1.01, cushion 0.024)
   optimizer_params.args.polar_method:
-    value: polarexpress
-  
-  # Sweep: num_iters patterns {5, 3}
-  optimizer_params.args.polar_num_iters:
-    values:
-      - [5]
-      - [3]
-  
-  # Safety factor (Phase 1 default)
-  optimizer_params.args.polar_safety:
-    value: 1.01
-  
-  # Sweep: cushion values
-  optimizer_params.args.polar_cushion:
-    values: [0.015, 0.02, 0.024, 0.03, 0.035, 0.04]
-  
-  # Newton-Schulz steps (Muon parameter)
+    values: [Keller, polarexpress]
+
+  # Newton–Schulz steps (used when polar_method = Keller)
   optimizer_params.args.ns_steps:
     value: 5
-  
-  # Seeds: 3 seeds for statistical robustness
+
+  # PolarExpress hyperparameters (used when polar_method = polarexpress)
+  optimizer_params.args.polar_num_iters:
+    value: [5]
+
+  optimizer_params.args.polar_safety:
+    value: 1.01
+
+  optimizer_params.args.polar_cushion:
+    value: 0.024
+
+  # Single seed for this focused comparison
   seed:
-    values: [42, 123, 456]
-  
-  # Training parameters (0.3 epochs)
+    value: 42
+
+  # Training parameters (1 full epoch)
   training_data.training_params.num_epochs:
-    value: 0.3
-  
+    value: 1
+
   training_data.training_params.batch_size:
-    value: 32
+    values: [16, 32]
 
   training_data.training_params.tokens_processed:
     value: 524288
-  
-  # Logging (same cadence as Phase 1 stage 2)
+
+  # Logging (same cadence as other 1-epoch Muon tests)
   # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
   logging_params.log_step:
     value: 160
-  
+
   logging_params.diag_log_step:
     value: 800
-  
+
   logging_params.val_step:
     value: 3200
-  
+
   logging_params.svd_log_step:
     value: 800
-  
+
   logging_params.save_ckpt_step:
     value: 3200
-  
+
   logging_params.wandb.project:
     value: "cs182-project-GPT-opt"
-  
-  logging_params.wandb.tags:
-    value: ["phase1", "cushion-sweep", "polarexpress"]
 
-# Phase 1 Cushion Sweep:
-#   2 num_iters patterns × 5 cushion values × 3 seeds = 30 runs
-# Purpose: Study interaction of PolarExpress num_iters {3,5} with cushion {0.2–0.3}
-#          at fixed safety=1.01 and lr=0.01, using the Phase 1 training setup.
+  logging_params.wandb.tags:
+    value: ["test", "muon", "ns-vs-pe"]
+
+# Test PE vs NS sweep:
+#   lr ∈ {0.01, 0.02}
+#   polar_method ∈ {Keller, polarexpress}
+#   seed = 42
+# → 4 runs comparing Muon+NS vs Muon+PE at two learning rates for 1 full epoch.

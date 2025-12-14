@@ -14,57 +14,61 @@ command:
 parameters:
   # Base configuration
   hydra.job.name:
-    value: "phase1-cushion-sweep"
+    value: "phase2-split"
   
-  # Dataset and model (same as Phase 1)
+  # Dataset and model (same as other Phase 2 runs)
   training_data:
     value: fineweb1B
   
   gpt_model:
     value: gpt-small
   
-  # Optimizer: Muon + PolarExpress (Phase 1 defaults)
+  # Muon optimizer with PolarExpress (split QKV, no head-splitting)
   optimizer_params.name:
     value: muon
   
-  # Learning rate (Phase 1 default)
+  # Learning rate and weight decay
   optimizer_params.args.lr:
-    value: 0.01
+    values: [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
   
   optimizer_params.args.weight_decay:
     value: 0.01
   
-  # AdamW betas for backup optimizer (same as Phase 1)
+  # AdamW betas for backup optimizer (embeddings, 1D params)
   optimizer_params.args.adamw_betas:
     value: [0.9, 0.999]
   
-  # PolarExpress method
+  # Use PolarExpress for orthogonalization (standard PE params)
   optimizer_params.args.polar_method:
     value: polarexpress
   
-  # Sweep: num_iters patterns {5, 3}
   optimizer_params.args.polar_num_iters:
-    values:
-      - [5]
-      - [3]
+    value: [5]
   
-  # Safety factor (Phase 1 default)
   optimizer_params.args.polar_safety:
     value: 1.01
   
-  # Sweep: cushion values
   optimizer_params.args.polar_cushion:
-    values: [0.015, 0.02, 0.024, 0.03, 0.035, 0.04]
+    value: 0.024
   
-  # Newton-Schulz steps (Muon parameter)
+  # Newton-Schulz steps (Muon internal parameter, still used for non-PE modes)
   optimizer_params.args.ns_steps:
     value: 5
-  
-  # Seeds: 3 seeds for statistical robustness
+
+  # Fixed Muon application mode for this sweep
+  #   - muon_mode: split_qkv
+  #   - split_heads: False
+  optimizer_params.args.muon_mode:
+    value: split_qkv
+
+  optimizer_params.args.split_heads:
+    value: False
+
+  # Three seeds (match other Phase 2 sweeps)
   seed:
     values: [42, 123, 456]
   
-  # Training parameters (0.3 epochs)
+  # Training parameters (0.3-epoch LR sweep)
   training_data.training_params.num_epochs:
     value: 0.3
   
@@ -74,7 +78,7 @@ parameters:
   training_data.training_params.tokens_processed:
     value: 524288
   
-  # Logging (same cadence as Phase 1 stage 2)
+  # Logging (same cadence as other 0.3-epoch Phase 2 sweeps)
   # Values are in micro-steps: 160=10 opt steps, 800=50 opt steps, 3200=200 opt steps
   logging_params.log_step:
     value: 160
@@ -95,9 +99,9 @@ parameters:
     value: "cs182-project-GPT-opt"
   
   logging_params.wandb.tags:
-    value: ["phase1", "cushion-sweep", "polarexpress"]
+    value: ["phase2", "muon", "split-qkv", "polarexpress", "muon-split-mslr-search"]
 
-# Phase 1 Cushion Sweep:
-#   2 num_iters patterns × 5 cushion values × 3 seeds = 30 runs
-# Purpose: Study interaction of PolarExpress num_iters {3,5} with cushion {0.2–0.3}
-#          at fixed safety=1.01 and lr=0.01, using the Phase 1 training setup.
+# Phase 2 Muon (split QKV, PolarExpress) LR sweep:
+#   lr  {0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10}
+#   seed  {42, 123, 456}
+#  30 Muon+PE split-QKV runs for LR stability analysis.

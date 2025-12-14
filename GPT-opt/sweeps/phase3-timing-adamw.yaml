@@ -1,0 +1,92 @@
+program: run_hydra.py
+method: grid
+metric:
+  # Use total training time as the sweep metric
+  name: train/total_time_seconds
+  goal: minimize
+
+# Tell wandb to use Hydra override syntax (no -- prefix)
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+
+parameters:
+  # Base configuration
+  hydra.job.name:
+    value: "timing-adamw"
+
+  # Dataset and model (match Muon timing sweep)
+  training_data:
+    value: fineweb1B
+
+  gpt_model:
+    value: gpt-small
+
+  # AdamW optimizer baseline for timing experiments
+  optimizer_params.name:
+    value: adamw
+
+  # Standard AdamW hyperparameters for timing
+  optimizer_params.args.lr:
+    value: 0.0003
+
+  optimizer_params.args.weight_decay:
+    value: 0.01
+
+  optimizer_params.args.betas:
+    value: [0.9, 0.999]
+
+  # Single seed for focused timing comparison
+  seed:
+    value: 42
+
+  # Training parameters (1 epoch timing run)
+  training_data.training_params.num_epochs:
+    value: 1
+
+  training_data.training_params.batch_size:
+    value: 32
+
+  training_data.training_params.tokens_processed:
+    value: 524288
+
+  # Logging configured for timing-only sweeps.
+  # timing_only=True ensures:
+  #   - Only light end-to-end metrics are logged (train/loss, train/step_time_ms, train/step)
+  #   - Heavy diagnostics (attention, SVD, orthogonality histograms, val metrics) are skipped.
+  logging_params.log_step:
+    value: 160
+
+  logging_params.diag_log_step:
+    value: 160
+
+  logging_params.val_step:
+    value: 3200
+
+  logging_params.svd_log_step:
+    value: 800
+
+  logging_params.save_ckpt_step:
+    value: 0
+
+  logging_params.save_checkpoint:
+    value: false
+
+  logging_params.timing_only:
+    value: true
+
+  logging_params.wandb.project:
+    value: "cs182-project-GPT-opt"
+
+  logging_params.wandb.tags:
+    value: ["timing", "adamw", "baseline"]
+
+# Timing AdamW baseline:
+#   optimizer = AdamW
+#   lr = 0.0003
+#   weight_decay = 0.01
+#   betas = (0.9, 0.999)
+#   seed = 42
+# → 1 AdamW timing run matching the Muon timing setup.

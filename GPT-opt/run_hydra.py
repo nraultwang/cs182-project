@@ -82,11 +82,83 @@ def main(config : DictConfig):
         model_copy = DDP(model_copy, device_ids=[local_rank])
 
     # Setup optimizer
-    optimizer_obj = get_optimizer_factory(opt_config['name'])
     opt_config_args = opt_config['args']
+
+    # Optional helper: map named Muon variants (and related baselines) to concrete settings
+    if opt_config['name'] == 'muon':
+        muon_variant = opt_config_args.get('muon_variant', None)
+        if muon_variant is not None:
+            if muon_variant == 'pe_all':
+                opt_config_args['polar_method'] = 'polarexpress'
+                opt_config_args['muon_mode'] = 'stacked_qkv'
+                if opt_config_args.get('polar_num_iters', None) is None:
+                    opt_config_args['polar_num_iters'] = 5
+                if opt_config_args.get('polar_cushion', None) is None:
+                    opt_config_args['polar_cushion'] = 0.024
+            elif muon_variant == 'ns_all':
+                opt_config_args['polar_method'] = 'Keller'
+                opt_config_args['muon_mode'] = 'stacked_qkv'
+            elif muon_variant == 'pe_mod_all':
+                opt_config_args['polar_method'] = 'polarexpress'
+                opt_config_args['muon_mode'] = 'stacked_qkv'
+                opt_config_args['polar_num_iters'] = 3
+                opt_config_args['polar_cushion'] = 0.04
+            elif muon_variant == 'pe_voffn':
+                opt_config_args['polar_method'] = 'polarexpress'
+                opt_config_args['muon_mode'] = 'voh_only'
+                # Use a smaller LR for voffn variants
+                opt_config_args['lr'] = 0.003
+            elif muon_variant == 'ns_voffn':
+                opt_config_args['polar_method'] = 'Keller'
+                opt_config_args['muon_mode'] = 'voh_only'
+                opt_config_args['lr'] = 0.003
+            elif muon_variant == 'adamw_repro':
+                # AdamW baseline for reproduce-paper sweeps
+                opt_config['name'] = 'adamw'
+                opt_config_args['lr'] = 0.0003
+                opt_config_args['weight_decay'] = 0.0
+                opt_config_args['betas'] = (0.9, 0.999)
+                # Remove Muon-only arguments that AdamW does not accept
+                for k in [
+                    'adamw_betas',
+                    'muon_mode',
+                    'split_heads',
+                    'polar_method',
+                    'polar_num_iters',
+                    'polar_safety',
+                    'polar_cushion',
+                    'ns_steps',
+                ]:
+                    opt_config_args.pop(k, None)
+            elif muon_variant == 'adamw_timing':
+                # AdamW baseline for timing sweeps
+                opt_config['name'] = 'adamw'
+                opt_config_args['lr'] = 0.0003
+                opt_config_args['weight_decay'] = 0.01
+                opt_config_args['betas'] = (0.9, 0.999)
+                for k in [
+                    'adamw_betas',
+                    'muon_mode',
+                    'split_heads',
+                    'polar_method',
+                    'polar_num_iters',
+                    'polar_safety',
+                    'polar_cushion',
+                    'ns_steps',
+                ]:
+                    opt_config_args.pop(k, None)
+            else:
+                raise ValueError(f"Unknown muon_variant: {muon_variant}")
+            # Do not pass helper field into the optimizer constructor
+            opt_config_args['muon_variant'] = None
+
     # Filter out None/null values to avoid passing unused parameters to optimizer
     opt_config_args = {k: v for k, v in opt_config_args.items() if v is not None}
-    if opt_config['name'] in ['muon']: opt_config_args['nheads'] = config['gpt_model'].get('n_head', None)
+
+    # Instantiate optimizer with possibly-updated name (e.g., adamw baselines)
+    optimizer_obj = get_optimizer_factory(opt_config['name'])
+    if opt_config['name'] in ['muon']:
+        opt_config_args['nheads'] = config['gpt_model'].get('n_head', None)
     optimizer = optimizer_obj(model_copy.named_parameters(), **opt_config_args)
     scheduler = get_scheduler(config['lr_schedule'], optimizer, total_iterations=total_iterations)
 
