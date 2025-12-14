@@ -211,4 +211,4 @@ wandb/
 .wandb/
 logs/
 
-**/plotting/data
+# **/plotting/data
