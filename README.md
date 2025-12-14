@@ -1,5 +1,5 @@
-# cs182-project
-Group project repo for cs182 
+# Riding the Polar Express to Convergence: Getting Attention on the Track to Stability
+Follow the steps below to reproduce the results presented in our main paper.
 
 ### Environment setup
 
@@ -33,6 +33,7 @@ Run `wandb login` to login to your wandb account.
 
 ## Step 3: Run a sweep
 Execute the following sequence of commands to run a simple sweep.
+NOTE: Your GPU must have at least 20 GB of VRAM to execute all the runs without Out-of-Memory Errors
 ```bash
 # Create a new wandb sweep
 wandb sweep sweeps/phase1-safety-sweep.yaml
@@ -43,6 +44,9 @@ As an example, your command should look like the following:
 ```bash
 CUDA_VISIBLE_DEVICES=0 wandb agent justin_yang-university-of-california-berkeley/cs182-project-GPT-opt/2jfn4wyv
 ```
+
+The Figure below depicts a successful initiation of a run:
+![alt text](docs/reproduce-steps.png)
 
 # Reproducing Plots
 
