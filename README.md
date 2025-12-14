@@ -6,7 +6,7 @@ Group project repo for cs182
 Install [miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install), then run the following commands
 ```bash
 # 1. Create a conda environment
-conda env create -f environment.yml
+conda env create -f environments.yaml
 conda activate cs182-py312
 
 ```
