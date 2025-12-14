@@ -210,4 +210,5 @@ __marimo__/
 wandb/
 .wandb/
 logs/
-plotting/
+
+# **/plotting/data
